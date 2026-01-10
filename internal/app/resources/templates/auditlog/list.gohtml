@@ -1,0 +1,53 @@
+{{/* auditlog/list - Audit log list */}}
+{{ define "auditlog/list" }}
+{{ template "layout" . }}
+{{ end }}
+
+{{ define "content" }}
+<div>
+    <h1 class="text-3xl font-bold mb-6">Audit Log</h1>
+
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <table class="w-full">
+            <thead class="bg-gray-50 dark:bg-gray-700">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Time</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Category</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Event</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">User</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">IP</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Status</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-600">
+                {{ range .Events }}
+                <tr>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">{{ .Timestamp.Format "2006-01-02 15:04:05" }}</td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">{{ .Category }}</td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">{{ .EventType }}</td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">{{ if .UserID }}{{ .UserID.Hex }}{{ else }}-{{ end }}</td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">{{ .IP }}</td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">
+                        {{ if .Success }}
+                        <span class="px-2 py-1 text-xs bg-green-100 text-green-800 rounded">Success</span>
+                        {{ else }}
+                        <span class="px-2 py-1 text-xs bg-red-100 text-red-800 rounded">Failed</span>
+                        {{ end }}
+                    </td>
+                </tr>
+                {{ else }}
+                <tr>
+                    <td colspan="6" class="px-4 py-8 text-center text-gray-500">No events found</td>
+                </tr>
+                {{ end }}
+            </tbody>
+        </table>
+    </div>
+
+    {{ if .HasMore }}
+    <div class="mt-4 text-center">
+        <a href="?cursor={{ .NextCursor }}" class="text-blue-600 hover:underline">Load More</a>
+    </div>
+    {{ end }}
+</div>
+{{ end }}

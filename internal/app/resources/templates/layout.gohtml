@@ -1,0 +1,70 @@
+{{/* internal/app/resources/templates/layout.gohtml */}}
+{{ define "layout" }}
+<!DOCTYPE html>
+<html lang="en" class="{{ if eq .ThemePreference "dark" }}dark{{ end }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ .Title }} - {{ .SiteName }}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    {{ template "nav" . }}
+    <main class="container mx-auto px-4 py-8">
+        {{ template "content" . }}
+    </main>
+    {{ if .FooterHTML }}
+    <footer class="border-t border-gray-200 dark:border-gray-700 py-4 text-center text-sm text-gray-500 dark:text-gray-400">
+        {{ .FooterHTML }}
+    </footer>
+    {{ end }}
+</body>
+</html>
+{{ end }}
+
+{{ define "nav" }}
+<nav class="bg-white dark:bg-gray-800 shadow-sm">
+    <div class="container mx-auto px-4">
+        <div class="flex justify-between items-center py-4">
+            <div class="flex items-center space-x-4">
+                {{ if .LogoURL }}
+                <img src="{{ .LogoURL }}" alt="{{ .SiteName }}" class="h-8">
+                {{ end }}
+                <a href="/" class="text-xl font-bold text-gray-900 dark:text-white">{{ .SiteName }}</a>
+            </div>
+            <div class="flex items-center space-x-4">
+                {{ if .IsLoggedIn }}
+                    {{ if eq .Role "admin" }}
+                    <a href="/dashboard" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Dashboard</a>
+                    <a href="/system-users" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Users</a>
+                    <a href="/audit-log" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Audit Log</a>
+                    <a href="/settings" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Settings</a>
+                    <a href="/admin/pages" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Pages</a>
+                    {{ end }}
+                    <a href="/profile" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Profile</a>
+                    <form action="/logout" method="POST" class="inline">
+                        <button type="submit" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Logout</button>
+                    </form>
+                {{ else }}
+                    <a href="/about" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">About</a>
+                    <a href="/contact" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Contact</a>
+                    <a href="/login" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Login</a>
+                {{ end }}
+            </div>
+        </div>
+    </div>
+</nav>
+{{ end }}
+
+{{ define "content" }}
+<h1>Content placeholder</h1>
+{{ end }}

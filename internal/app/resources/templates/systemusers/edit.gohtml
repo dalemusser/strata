@@ -1,0 +1,60 @@
+{{/* systemusers/edit - Edit user */}}
+{{ define "systemusers/edit" }}
+{{ template "layout" . }}
+{{ end }}
+
+{{ define "content" }}
+<div class="max-w-2xl mx-auto">
+    <h1 class="text-3xl font-bold mb-6">Edit {{ .User.FullName }}</h1>
+
+    {{ if .Success }}
+    <div class="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 p-3 rounded mb-4">{{ .Success }}</div>
+    {{ end }}
+    {{ if .Error }}
+    <div class="bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200 p-3 rounded mb-4">{{ .Error }}</div>
+    {{ end }}
+
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <form method="POST" action="/system-users/{{ .User.ID.Hex }}" class="space-y-4">
+            <div>
+                <label for="full_name" class="block text-sm font-medium mb-1">Full Name *</label>
+                <input type="text" id="full_name" name="full_name" value="{{ .User.FullName }}" required
+                    class="w-full px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+            </div>
+            <div>
+                <label for="email" class="block text-sm font-medium mb-1">Email</label>
+                <input type="email" id="email" name="email" value="{{ if .User.Email }}{{ .User.Email }}{{ end }}"
+                    class="w-full px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+            </div>
+            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Save Changes</button>
+        </form>
+    </div>
+
+    <div class="mt-6 bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h2 class="text-xl font-semibold mb-4">Reset Password</h2>
+        <form method="POST" action="/system-users/{{ .User.ID.Hex }}/reset-password" class="space-y-4">
+            <div>
+                <label for="new_password" class="block text-sm font-medium mb-1">New Password</label>
+                <input type="password" id="new_password" name="new_password" required minlength="8"
+                    class="w-full px-3 py-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+            </div>
+            <button type="submit" class="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700">Reset Password</button>
+        </form>
+    </div>
+
+    <div class="mt-6 bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h2 class="text-xl font-semibold mb-4">Account Status</h2>
+        {{ if eq .User.Status "active" }}
+        <form method="POST" action="/system-users/{{ .User.ID.Hex }}/disable">
+            <button type="submit" class="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700">Disable Account</button>
+        </form>
+        {{ else }}
+        <form method="POST" action="/system-users/{{ .User.ID.Hex }}/enable">
+            <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Enable Account</button>
+        </form>
+        {{ end }}
+    </div>
+
+    <p class="mt-4"><a href="/system-users" class="text-blue-600 hover:underline">Back to Users</a></p>
+</div>
+{{ end }}

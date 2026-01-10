@@ -1,0 +1,387 @@
+// internal/app/system/indexes/indexes.go
+package indexes
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap"
+)
+
+/*
+EnsureAll is called at startup. Each ensure* function is idempotent.
+We aggregate errors so any problem is visible and startup can fail fast.
+*/
+func EnsureAll(ctx context.Context, db *mongo.Database) error {
+	var problems []string
+
+	if err := ensureUsers(ctx, db); err != nil {
+		problems = append(problems, "users: "+err.Error())
+	}
+	if err := ensurePages(ctx, db); err != nil {
+		problems = append(problems, "pages: "+err.Error())
+	}
+	if err := ensureEmailVerifications(ctx, db); err != nil {
+		problems = append(problems, "email_verifications: "+err.Error())
+	}
+	if err := ensureOAuthStates(ctx, db); err != nil {
+		problems = append(problems, "oauth_states: "+err.Error())
+	}
+	if err := ensureSiteSettings(ctx, db); err != nil {
+		problems = append(problems, "site_settings: "+err.Error())
+	}
+	if err := ensureAuditLogs(ctx, db); err != nil {
+		problems = append(problems, "audit_logs: "+err.Error())
+	}
+
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+/* -------------------------------------------------------------------------- */
+/* Core helper: reconcile a set of desired indexes for one collection         */
+/* -------------------------------------------------------------------------- */
+
+type existingIndex struct {
+	Name   string `bson:"name"`
+	Key    bson.D `bson:"key"`
+	Unique *bool  `bson:"unique,omitempty"`
+}
+
+func keySig(keys bson.D) string {
+	parts := make([]string, 0, len(keys))
+	for _, kv := range keys {
+		parts = append(parts, fmt.Sprintf("%s:%v", kv.Key, kv.Value))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func sameBoolPtr(a, b *bool) bool {
+	av := false
+	bv := false
+	if a != nil {
+		av = *a
+	}
+	if b != nil {
+		bv = *b
+	}
+	return av == bv
+}
+
+// Best-effort duplicate-detector (works cross-vendors)
+func isDuplicateKeyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var we mongo.WriteException
+	if errors.As(err, &we) {
+		for _, e := range we.WriteErrors {
+			if e.Code == 11000 { // E11000 duplicate key error index
+				return true
+			}
+		}
+	}
+	var ce mongo.CommandError
+	if errors.As(err, &ce) && ce.Code == 11000 {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "E11000") || strings.Contains(strings.ToLower(s), "duplicate key")
+}
+
+// Mongo/DocDB sometimes returns IndexOptionsConflict when an index with the
+// same keys already exists under a different name (or options differ).
+func isOptionsConflictErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "IndexOptionsConflict")
+}
+
+func ensureIndexSet(ctx context.Context, coll *mongo.Collection, models []mongo.IndexModel) error {
+	var errs []string
+
+	for _, m := range models {
+		var desiredName string
+		var desiredUnique *bool
+		if m.Options != nil {
+			if m.Options.Name != nil {
+				desiredName = *m.Options.Name
+			}
+			if m.Options.Unique != nil {
+				desiredUnique = m.Options.Unique
+			}
+		}
+		desiredSig := keySig(m.Keys.(bson.D))
+
+		start := time.Now()
+		zap.L().Info("ensuring index",
+			zap.String("collection", coll.Name()),
+			zap.String("name", desiredName),
+			zap.String("keys", desiredSig),
+			zap.Bool("unique", desiredUnique != nil && *desiredUnique))
+
+		// 1) Load existing indexes
+		existing := map[string]existingIndex{} // sig -> index
+		cur, err := coll.Indexes().List(ctx)
+		if err == nil {
+			defer cur.Close(ctx)
+			for cur.Next(ctx) {
+				var idx existingIndex
+				if err := cur.Decode(&idx); err != nil {
+					zap.L().Warn("failed to decode existing index",
+						zap.String("collection", coll.Name()),
+						zap.Error(err))
+					continue
+				}
+				existing[keySig(idx.Key)] = idx
+			}
+		}
+
+		if ex, ok := existing[desiredSig]; ok {
+			// Same key pattern exists already.
+			if sameBoolPtr(desiredUnique, ex.Unique) {
+				// Names aligned (or we don't care) → reuse
+				zap.L().Info("reusing existing index",
+					zap.String("collection", coll.Name()),
+					zap.String("name", ex.Name),
+					zap.String("keys", desiredSig),
+					zap.Bool("unique", ex.Unique != nil && *ex.Unique),
+					zap.String("took", time.Since(start).String()))
+				continue
+			}
+
+			// Options mismatch (e.g., upgrading to unique). Drop & recreate.
+			if _, err := coll.Indexes().DropOne(ctx, ex.Name); err != nil {
+				zap.L().Warn("drop existing index failed",
+					zap.String("collection", coll.Name()),
+					zap.String("name", ex.Name),
+					zap.String("keys", desiredSig),
+					zap.Error(err))
+				errs = append(errs, fmt.Sprintf("%s(%s): drop failed: %v", coll.Name(), desiredName, err))
+				continue
+			}
+			if _, err := coll.Indexes().CreateOne(ctx, m); err != nil {
+				if isDuplicateKeyErr(err) && desiredUnique != nil && *desiredUnique {
+					errs = append(errs, fmt.Sprintf("%s(%s): cannot create unique index (duplicates present)", coll.Name(), desiredName))
+				} else {
+					errs = append(errs, fmt.Sprintf("%s(%s): %v", coll.Name(), desiredName, err))
+				}
+				continue
+			}
+			zap.L().Info("index dropped and recreated",
+				zap.String("collection", coll.Name()),
+				zap.String("name", desiredName),
+				zap.String("keys", desiredSig),
+				zap.Bool("unique", desiredUnique != nil && *desiredUnique),
+				zap.String("took", time.Since(start).String()))
+			continue
+		}
+
+		// 2) No existing index with the same keys: create it.
+		if created, err := coll.Indexes().CreateOne(ctx, m); err != nil {
+			if isOptionsConflictErr(err) {
+				zap.L().Warn("index ensure failed (options conflict)",
+					zap.String("collection", coll.Name()),
+					zap.String("name", desiredName),
+					zap.String("keys", desiredSig),
+					zap.Error(err))
+				errs = append(errs, fmt.Sprintf("%s(%s): %v", coll.Name(), desiredName, err))
+				continue
+			}
+
+			zap.L().Warn("index ensure failed",
+				zap.String("collection", coll.Name()),
+				zap.String("name", desiredName),
+				zap.String("keys", desiredSig),
+				zap.Bool("unique", desiredUnique != nil && *desiredUnique),
+				zap.String("took", time.Since(start).String()),
+				zap.Error(err))
+			errs = append(errs, fmt.Sprintf("%s(%s): %v", coll.Name(), desiredName, err))
+			continue
+		} else {
+			zap.L().Info("index ensured",
+				zap.String("collection", coll.Name()),
+				zap.String("name", desiredName),
+				zap.String("created_name", created),
+				zap.String("keys", desiredSig),
+				zap.Bool("unique", desiredUnique != nil && *desiredUnique),
+				zap.String("took", time.Since(start).String()))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+/* -------------------------------------------------------------------------- */
+/* Collection-specific index sets                                              */
+/* -------------------------------------------------------------------------- */
+
+func ensureUsers(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("users")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Unique login_id_ci + auth_method combination
+		{
+			Keys: bson.D{
+				{Key: "login_id_ci", Value: 1},
+				{Key: "auth_method", Value: 1},
+			},
+			Options: options.Index().SetUnique(true).SetSparse(true).SetName("uniq_users_login_auth"),
+		},
+
+		// User list queries: role + status + name sort
+		{
+			Keys: bson.D{
+				{Key: "role", Value: 1},
+				{Key: "status", Value: 1},
+				{Key: "full_name_ci", Value: 1},
+				{Key: "_id", Value: 1},
+			},
+			Options: options.Index().SetName("idx_users_role_status_fullnameci_id"),
+		},
+
+		// Login ID search path
+		{
+			Keys: bson.D{
+				{Key: "role", Value: 1},
+				{Key: "status", Value: 1},
+				{Key: "login_id_ci", Value: 1},
+				{Key: "_id", Value: 1},
+			},
+			Options: options.Index().SetName("idx_users_role_status_loginidci_id"),
+		},
+	})
+}
+
+func ensurePages(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("pages")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Unique slug for each page (about, contact, terms-of-service, privacy-policy)
+		{
+			Keys: bson.D{
+				{Key: "slug", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetName("uniq_pages_slug"),
+		},
+	})
+}
+
+func ensureEmailVerifications(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("email_verifications")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// TTL index for auto-cleanup of expired verifications
+		{
+			Keys: bson.D{
+				{Key: "expires_at", Value: 1},
+			},
+			Options: options.Index().
+				SetExpireAfterSeconds(0).
+				SetName("idx_emailverify_expires_ttl"),
+		},
+		// Lookup by token (for magic link verification)
+		{
+			Keys: bson.D{
+				{Key: "token", Value: 1},
+			},
+			Options: options.Index().
+				SetName("idx_emailverify_token"),
+		},
+		// Lookup by user_id (for code verification and cleanup)
+		{
+			Keys: bson.D{
+				{Key: "user_id", Value: 1},
+			},
+			Options: options.Index().
+				SetName("idx_emailverify_user"),
+		},
+	})
+}
+
+func ensureOAuthStates(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("oauth_states")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Unique state token
+		{
+			Keys: bson.D{
+				{Key: "state", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetName("uniq_oauth_state"),
+		},
+		// TTL index for auto-cleanup of expired states
+		{
+			Keys: bson.D{
+				{Key: "expires_at", Value: 1},
+			},
+			Options: options.Index().
+				SetExpireAfterSeconds(0).
+				SetName("idx_oauth_expires_ttl"),
+		},
+	})
+}
+
+func ensureSiteSettings(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("site_settings")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Unique singleton - only one settings document
+		{
+			Keys: bson.D{
+				{Key: "singleton", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetName("uniq_sitesettings_singleton"),
+		},
+	})
+}
+
+func ensureAuditLogs(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("audit_logs")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Time-based queries (most common)
+		{
+			Keys: bson.D{
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_audit_created"),
+		},
+		// Category + time queries
+		{
+			Keys: bson.D{
+				{Key: "category", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_audit_category_created"),
+		},
+		// User-specific audit trail
+		{
+			Keys: bson.D{
+				{Key: "user_id", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_audit_user_created"),
+		},
+		// Actor-specific audit trail
+		{
+			Keys: bson.D{
+				{Key: "actor_id", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_audit_actor_created"),
+		},
+	})
+}
