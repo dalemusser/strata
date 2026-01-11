@@ -1,12 +1,17 @@
 // internal/app/features/login/login.go
 package login
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"net/http"
 	"time"
 
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
 	"github.com/dalemusser/strata/internal/app/store/emailverify"
+	"github.com/dalemusser/strata/internal/app/store/passwordreset"
 	"github.com/dalemusser/strata/internal/app/store/sessions"
 	userstore "github.com/dalemusser/strata/internal/app/store/users"
 	"github.com/dalemusser/strata/internal/app/system/auth"
@@ -16,23 +21,25 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
 
 // Handler provides login handlers.
 type Handler struct {
-	userStore         *userstore.Store
-	emailVerifyStore  *emailverify.Store
-	sessionsStore     *sessions.Store
-	sessionMgr        *auth.SessionManager
-	errLog            *errorsfeature.ErrorLogger
-	mailer            *mailer.Mailer
-	auditLogger       *auditlog.Logger
-	baseURL           string
-	emailVerifyExpiry time.Duration
-	googleEnabled     bool
-	logger            *zap.Logger
+	userStore          *userstore.Store
+	emailVerifyStore   *emailverify.Store
+	passwordResetStore *passwordreset.Store
+	sessionsStore      *sessions.Store
+	sessionMgr         *auth.SessionManager
+	errLog             *errorsfeature.ErrorLogger
+	mailer             *mailer.Mailer
+	auditLogger        *auditlog.Logger
+	baseURL            string
+	emailVerifyExpiry  time.Duration
+	googleEnabled      bool
+	logger             *zap.Logger
 }
 
 // NewHandler creates a new login Handler.
@@ -48,18 +55,25 @@ func NewHandler(
 	googleEnabled bool,
 	logger *zap.Logger,
 ) *Handler {
+	// Use same expiry for password reset as email verification (default 10 minutes)
+	passwordResetExpiry := emailVerifyExpiry
+	if passwordResetExpiry == 0 {
+		passwordResetExpiry = 10 * time.Minute
+	}
+
 	return &Handler{
-		userStore:         userstore.New(db),
-		emailVerifyStore:  emailverify.New(db, emailVerifyExpiry),
-		sessionsStore:     sessionsStore,
-		sessionMgr:        sessionMgr,
-		errLog:            errLog,
-		mailer:            m,
-		auditLogger:       auditLogger,
-		baseURL:           baseURL,
-		emailVerifyExpiry: emailVerifyExpiry,
-		googleEnabled:     googleEnabled,
-		logger:            logger,
+		userStore:          userstore.New(db),
+		emailVerifyStore:   emailverify.New(db, emailVerifyExpiry),
+		passwordResetStore: passwordreset.New(db, passwordResetExpiry),
+		sessionsStore:      sessionsStore,
+		sessionMgr:         sessionMgr,
+		errLog:             errLog,
+		mailer:             m,
+		auditLogger:        auditLogger,
+		baseURL:            baseURL,
+		emailVerifyExpiry:  emailVerifyExpiry,
+		googleEnabled:      googleEnabled,
+		logger:             logger,
 	}
 }
 
@@ -69,6 +83,7 @@ type LoginVM struct {
 	GoogleEnabled bool
 	Error         string
 	LoginID       string
+	ReturnURL     string
 }
 
 // Routes returns a chi.Router with login routes mounted.
@@ -86,6 +101,12 @@ func Routes(h *Handler) http.Handler {
 	r.Get("/password", h.showPasswordLogin)
 	r.Post("/password", h.handlePasswordLogin)
 
+	// Password reset
+	r.Get("/forgot-password", h.showForgotPassword)
+	r.Post("/forgot-password", h.handleForgotPassword)
+	r.Get("/reset-password", h.showResetPassword)
+	r.Post("/reset-password", h.handleResetPassword)
+
 	// Email verification auth
 	r.Get("/email", h.showEmailLogin)
 	r.Post("/email", h.handleEmailLogin)
@@ -96,31 +117,102 @@ func Routes(h *Handler) http.Handler {
 	return r
 }
 
-// showLogin displays the login method selection page.
+// showLogin displays the login page with login_id field.
 func (h *Handler) showLogin(w http.ResponseWriter, r *http.Request) {
 	vm := LoginVM{
 		BaseVM:        viewdata.New(r),
 		GoogleEnabled: h.googleEnabled,
+		ReturnURL:     r.URL.Query().Get("return"),
+		Error:         r.URL.Query().Get("error"),
 	}
 	vm.Title = "Login"
 
 	templates.Render(w, r, "login/index", vm)
 }
 
-// handleLogin redirects to the appropriate login method.
+// handleLogin looks up the user by login_id and redirects to the appropriate auth method.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	method := r.FormValue("method")
-	switch method {
+	if err := r.ParseForm(); err != nil {
+		h.errLog.Log(r, "failed to parse form", err)
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	loginID := r.FormValue("login_id")
+	returnURL := r.FormValue("return")
+
+	if loginID == "" {
+		vm := LoginVM{
+			BaseVM:        viewdata.New(r),
+			GoogleEnabled: h.googleEnabled,
+			Error:         "Please enter your Login ID",
+			ReturnURL:     returnURL,
+		}
+		vm.Title = "Login"
+		templates.Render(w, r, "login/index", vm)
+		return
+	}
+
+	// Look up user by login_id
+	user, err := h.userStore.GetByLoginID(r.Context(), loginID)
+	if err != nil {
+		// User not found - show error
+		h.auditLogger.LogAuthEvent(r, nil, "login_failed_user_not_found", false, "user not found")
+		vm := LoginVM{
+			BaseVM:        viewdata.New(r),
+			GoogleEnabled: h.googleEnabled,
+			Error:         "User not found",
+			LoginID:       loginID,
+			ReturnURL:     returnURL,
+		}
+		vm.Title = "Login"
+		templates.Render(w, r, "login/index", vm)
+		return
+	}
+
+	if user.Status != "active" {
+		h.auditLogger.LogAuthEvent(r, &user.ID, "login_failed_user_disabled", false, "user disabled")
+		vm := LoginVM{
+			BaseVM:        viewdata.New(r),
+			GoogleEnabled: h.googleEnabled,
+			Error:         "Account is disabled",
+			LoginID:       loginID,
+			ReturnURL:     returnURL,
+		}
+		vm.Title = "Login"
+		templates.Render(w, r, "login/index", vm)
+		return
+	}
+
+	// Redirect based on user's auth method
+	returnParam := ""
+	if returnURL != "" {
+		returnParam = "?return=" + returnURL
+	}
+
+	switch user.AuthMethod {
 	case "trust":
-		http.Redirect(w, r, "/login/trust", http.StatusSeeOther)
+		// Trust auth - log in immediately
+		if err := h.createTrackedSession(w, r, user.ID, user.Role); err != nil {
+			h.errLog.Log(r, "failed to create session", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		h.auditLogger.LogAuthEvent(r, &user.ID, "login_success", true, "")
+		if returnURL != "" {
+			http.Redirect(w, r, returnURL, http.StatusSeeOther)
+		} else {
+			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		}
 	case "password":
-		http.Redirect(w, r, "/login/password", http.StatusSeeOther)
+		http.Redirect(w, r, "/login/password?login_id="+loginID+returnParam, http.StatusSeeOther)
 	case "email":
-		http.Redirect(w, r, "/login/email", http.StatusSeeOther)
+		http.Redirect(w, r, "/login/email?login_id="+loginID+returnParam, http.StatusSeeOther)
 	case "google":
-		http.Redirect(w, r, "/auth/google", http.StatusSeeOther)
+		http.Redirect(w, r, "/auth/google"+returnParam, http.StatusSeeOther)
 	default:
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		// Default to password if auth_method is not set
+		http.Redirect(w, r, "/login/password?login_id="+loginID+returnParam, http.StatusSeeOther)
 	}
 }
 
@@ -177,7 +269,7 @@ func (h *Handler) handleTrustLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create session
-	if err := h.sessionMgr.CreateSession(w, r, user.ID, user.Role); err != nil {
+	if err := h.createTrackedSession(w, r, user.ID, user.Role); err != nil {
 		h.errLog.Log(r, "failed to create session", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -191,16 +283,19 @@ func (h *Handler) handleTrustLogin(w http.ResponseWriter, r *http.Request) {
 // PasswordLoginVM is the view model for password login.
 type PasswordLoginVM struct {
 	viewdata.BaseVM
-	Error   string
-	LoginID string
+	Error     string
+	LoginID   string
+	ReturnURL string
 }
 
 // showPasswordLogin displays the password login form.
 func (h *Handler) showPasswordLogin(w http.ResponseWriter, r *http.Request) {
 	vm := PasswordLoginVM{
-		BaseVM: viewdata.New(r),
+		BaseVM:    viewdata.New(r),
+		LoginID:   r.URL.Query().Get("login_id"),
+		ReturnURL: r.URL.Query().Get("return"),
 	}
-	vm.Title = "Password Login"
+	vm.Title = "Enter Password"
 
 	templates.Render(w, r, "login/password", vm)
 }
@@ -254,7 +349,7 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create session
-	if err := h.sessionMgr.CreateSession(w, r, user.ID, user.Role); err != nil {
+	if err := h.createTrackedSession(w, r, user.ID, user.Role); err != nil {
 		h.errLog.Log(r, "failed to create session", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -394,7 +489,7 @@ func (h *Handler) handleEmailVerify(w http.ResponseWriter, r *http.Request) {
 	h.emailVerifyStore.MarkUsed(r.Context(), verification.ID)
 
 	// Create session
-	if err := h.sessionMgr.CreateSession(w, r, user.ID, user.Role); err != nil {
+	if err := h.createTrackedSession(w, r, user.ID, user.Role); err != nil {
 		h.errLog.Log(r, "failed to create session", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -426,7 +521,7 @@ func (h *Handler) handleMagicLink(w http.ResponseWriter, r *http.Request) {
 	h.emailVerifyStore.MarkUsed(r.Context(), verification.ID)
 
 	// Create session
-	if err := h.sessionMgr.CreateSession(w, r, user.ID, user.Role); err != nil {
+	if err := h.createTrackedSession(w, r, user.ID, user.Role); err != nil {
 		h.errLog.Log(r, "failed to create session", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -435,6 +530,236 @@ func (h *Handler) handleMagicLink(w http.ResponseWriter, r *http.Request) {
 	h.auditLogger.LogAuthEvent(r, &user.ID, "magic_link_used", true, "")
 
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+
+// ForgotPasswordVM is the view model for forgot password.
+type ForgotPasswordVM struct {
+	viewdata.BaseVM
+	Error   string
+	Success string
+	Email   string
+}
+
+// showForgotPassword displays the forgot password form.
+func (h *Handler) showForgotPassword(w http.ResponseWriter, r *http.Request) {
+	vm := ForgotPasswordVM{
+		BaseVM: viewdata.New(r),
+	}
+	vm.Title = "Forgot Password"
+
+	templates.Render(w, r, "login/forgot_password", vm)
+}
+
+// handleForgotPassword sends a password reset email.
+func (h *Handler) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.errLog.Log(r, "failed to parse form", err)
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	email := r.FormValue("email")
+
+	// Always show success message to avoid email enumeration
+	successVM := ForgotPasswordVM{
+		BaseVM:  viewdata.New(r),
+		Success: "If an account exists with that email, you will receive a password reset link.",
+	}
+	successVM.Title = "Forgot Password"
+
+	if email == "" {
+		vm := ForgotPasswordVM{
+			BaseVM: viewdata.New(r),
+			Error:  "Please enter your email address",
+		}
+		vm.Title = "Forgot Password"
+		templates.Render(w, r, "login/forgot_password", vm)
+		return
+	}
+
+	// Look up user by email
+	user, err := h.userStore.GetByEmail(r.Context(), email)
+	if err != nil {
+		// User not found - still show success to avoid enumeration
+		h.auditLogger.LogAuthEvent(r, nil, "password_reset_requested", true, "user not found")
+		templates.Render(w, r, "login/forgot_password", successVM)
+		return
+	}
+
+	if user.Status != "active" {
+		// Disabled user - still show success
+		h.auditLogger.LogAuthEvent(r, &user.ID, "password_reset_requested", false, "user disabled")
+		templates.Render(w, r, "login/forgot_password", successVM)
+		return
+	}
+
+	// Only allow password reset for password auth users
+	if user.AuthMethod != "password" && user.AuthMethod != "" {
+		h.auditLogger.LogAuthEvent(r, &user.ID, "password_reset_requested", false, "not password auth")
+		templates.Render(w, r, "login/forgot_password", successVM)
+		return
+	}
+
+	// Create password reset token
+	reset, err := h.passwordResetStore.Create(r.Context(), user.ID, email)
+	if err != nil {
+		h.errLog.Log(r, "failed to create password reset", err)
+		templates.Render(w, r, "login/forgot_password", successVM)
+		return
+	}
+
+	// Send email with reset link
+	if h.mailer != nil {
+		resetURL := h.baseURL + "/login/reset-password?token=" + reset.Token
+		err = h.mailer.Send(mailer.Email{
+			To:      email,
+			Subject: "Password Reset Request",
+			TextBody: "You requested a password reset. Click the link below to reset your password:\n\n" +
+				resetURL + "\n\n" +
+				"This link will expire in 10 minutes.\n\n" +
+				"If you did not request this, you can safely ignore this email.",
+		})
+		if err != nil {
+			h.errLog.Log(r, "failed to send password reset email", err)
+		}
+	}
+
+	h.auditLogger.LogAuthEvent(r, &user.ID, "password_reset_requested", true, "")
+
+	templates.Render(w, r, "login/forgot_password", successVM)
+}
+
+// ResetPasswordVM is the view model for reset password.
+type ResetPasswordVM struct {
+	viewdata.BaseVM
+	Error   string
+	Success string
+	Token   string
+}
+
+// showResetPassword displays the reset password form.
+func (h *Handler) showResetPassword(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+
+	// Verify token is valid before showing form
+	_, err := h.passwordResetStore.VerifyToken(r.Context(), token)
+	if err != nil {
+		vm := ResetPasswordVM{
+			BaseVM: viewdata.New(r),
+			Error:  "Invalid or expired reset link. Please request a new one.",
+		}
+		vm.Title = "Reset Password"
+		templates.Render(w, r, "login/reset_password", vm)
+		return
+	}
+
+	vm := ResetPasswordVM{
+		BaseVM: viewdata.New(r),
+		Token:  token,
+	}
+	vm.Title = "Reset Password"
+
+	templates.Render(w, r, "login/reset_password", vm)
+}
+
+// handleResetPassword processes the password reset.
+func (h *Handler) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.errLog.Log(r, "failed to parse form", err)
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	token := r.FormValue("token")
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	// Verify token
+	reset, err := h.passwordResetStore.VerifyToken(r.Context(), token)
+	if err != nil {
+		h.auditLogger.LogAuthEvent(r, nil, "password_reset_failed", false, "invalid token")
+		vm := ResetPasswordVM{
+			BaseVM: viewdata.New(r),
+			Error:  "Invalid or expired reset link. Please request a new one.",
+		}
+		vm.Title = "Reset Password"
+		templates.Render(w, r, "login/reset_password", vm)
+		return
+	}
+
+	// Validate passwords
+	if password == "" {
+		vm := ResetPasswordVM{
+			BaseVM: viewdata.New(r),
+			Token:  token,
+			Error:  "Password is required",
+		}
+		vm.Title = "Reset Password"
+		templates.Render(w, r, "login/reset_password", vm)
+		return
+	}
+
+	if len(password) < 8 {
+		vm := ResetPasswordVM{
+			BaseVM: viewdata.New(r),
+			Token:  token,
+			Error:  "Password must be at least 8 characters",
+		}
+		vm.Title = "Reset Password"
+		templates.Render(w, r, "login/reset_password", vm)
+		return
+	}
+
+	if password != confirmPassword {
+		vm := ResetPasswordVM{
+			BaseVM: viewdata.New(r),
+			Token:  token,
+			Error:  "Passwords do not match",
+		}
+		vm.Title = "Reset Password"
+		templates.Render(w, r, "login/reset_password", vm)
+		return
+	}
+
+	// Hash new password
+	hash, err := authutil.HashPassword(password)
+	if err != nil {
+		h.errLog.Log(r, "failed to hash password", err)
+		vm := ResetPasswordVM{
+			BaseVM: viewdata.New(r),
+			Token:  token,
+			Error:  "Failed to reset password. Please try again.",
+		}
+		vm.Title = "Reset Password"
+		templates.Render(w, r, "login/reset_password", vm)
+		return
+	}
+
+	// Update user password
+	if err := h.userStore.UpdatePassword(r.Context(), reset.UserID, hash); err != nil {
+		h.errLog.Log(r, "failed to update password", err)
+		vm := ResetPasswordVM{
+			BaseVM: viewdata.New(r),
+			Token:  token,
+			Error:  "Failed to reset password. Please try again.",
+		}
+		vm.Title = "Reset Password"
+		templates.Render(w, r, "login/reset_password", vm)
+		return
+	}
+
+	// Mark reset token as used
+	h.passwordResetStore.MarkUsed(r.Context(), reset.ID)
+
+	h.auditLogger.LogAuthEvent(r, &reset.UserID, "password_reset_completed", true, "")
+
+	// Show success and redirect to login
+	vm := ResetPasswordVM{
+		BaseVM:  viewdata.New(r),
+		Success: "Your password has been reset. You can now log in with your new password.",
+	}
+	vm.Title = "Reset Password"
+	templates.Render(w, r, "login/reset_password", vm)
 }
 
 // getClientIP extracts the client IP from the request.
@@ -446,4 +771,36 @@ func getClientIP(r *http.Request) string {
 		return ip
 	}
 	return r.RemoteAddr
+}
+
+// createTrackedSession creates a session in both the cookie and MongoDB for tracking.
+func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
+	// First create the cookie session
+	if err := h.sessionMgr.CreateSession(w, r, userID, role); err != nil {
+		return err
+	}
+
+	// Get the session token that was just created
+	token := h.sessionMgr.GetSessionToken(r)
+	if token == "" {
+		return nil // No tracking if no token
+	}
+
+	// Store session in MongoDB for tracking
+	now := time.Now()
+	session := sessions.Session{
+		Token:        token,
+		UserID:       userID,
+		IPAddress:    getClientIP(r),
+		UserAgent:    r.UserAgent(),
+		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
+		LastActivity: now,
+	}
+
+	// Best effort - don't fail login if tracking fails
+	if err := h.sessionsStore.Create(r.Context(), session); err != nil {
+		h.logger.Warn("failed to track session", zap.Error(err))
+	}
+
+	return nil
 }

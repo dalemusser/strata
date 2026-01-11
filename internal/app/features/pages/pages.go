@@ -2,6 +2,7 @@
 package pages
 
 import (
+	"html/template"
 	"net/http"
 
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
@@ -34,7 +35,9 @@ func NewHandler(db *mongo.Database, errLog *errorsfeature.ErrorLogger, logger *z
 // PageVM is the view model for page content.
 type PageVM struct {
 	viewdata.BaseVM
-	Content string
+	Slug    string
+	Content template.HTML
+	CanEdit bool
 }
 
 // AboutRouter returns a router for the about page.
@@ -75,14 +78,22 @@ func (h *Handler) showPage(slug, defaultTitle string) http.HandlerFunc {
 			return
 		}
 
+		// Check if user is admin for edit button
+		canEdit := false
+		if user, ok := auth.CurrentUser(r); ok && user.Role == "admin" {
+			canEdit = true
+		}
+
 		vm := PageVM{
-			BaseVM: viewdata.New(r),
+			BaseVM:  viewdata.New(r),
+			Slug:    slug,
+			CanEdit: canEdit,
 		}
 		vm.Title = defaultTitle
 
 		if err == nil {
 			vm.Title = page.Title
-			vm.Content = page.Content
+			vm.Content = template.HTML(page.Content)
 		}
 
 		templates.Render(w, r, "pages/show", vm)
@@ -104,11 +115,27 @@ func EditRoutes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 // EditPageVM is the view model for editing a page.
 type EditPageVM struct {
 	viewdata.BaseVM
-	Slug    string
-	Title   string
-	Content string
-	Success bool
-	Error   string
+	Slug      string
+	PageTitle string
+	Content   string
+	Success   bool
+	Error     string
+}
+
+// pageDisplayName returns a human-friendly name for a page slug.
+func pageDisplayName(slug string) string {
+	switch slug {
+	case "about":
+		return "About"
+	case "contact":
+		return "Contact"
+	case "terms":
+		return "Terms of Service"
+	case "privacy":
+		return "Privacy Policy"
+	default:
+		return slug
+	}
 }
 
 // listPages shows all editable pages.
@@ -142,10 +169,15 @@ func (h *Handler) editPage(w http.ResponseWriter, r *http.Request) {
 		BaseVM: viewdata.New(r),
 		Slug:   slug,
 	}
-	vm.Title = "Edit Page"
+	vm.Title = "Edit " + pageDisplayName(slug)
+
+	// Check for success query parameter
+	if r.URL.Query().Get("success") == "1" {
+		vm.Success = true
+	}
 
 	if err == nil {
-		vm.Title = page.Title
+		vm.PageTitle = page.Title
 		vm.Content = page.Content
 	}
 
@@ -175,12 +207,13 @@ func (h *Handler) updatePage(w http.ResponseWriter, r *http.Request) {
 		h.errLog.Log(r, "failed to update page", err)
 
 		vm := EditPageVM{
-			BaseVM:  viewdata.New(r),
-			Slug:    slug,
-			Title:   title,
-			Content: content,
-			Error:   "Failed to save page. Please try again.",
+			BaseVM:    viewdata.New(r),
+			Slug:      slug,
+			PageTitle: title,
+			Content:   content,
+			Error:     "Failed to save page. Please try again.",
 		}
+		vm.Title = "Edit " + pageDisplayName(slug)
 		templates.Render(w, r, "pages/edit", vm)
 		return
 	}

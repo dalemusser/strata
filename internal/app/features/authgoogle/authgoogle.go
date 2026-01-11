@@ -1,6 +1,10 @@
 // internal/app/features/authgoogle/authgoogle.go
 package authgoogle
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"context"
 	"crypto/rand"
@@ -16,6 +20,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
 	"github.com/go-chi/chi/v5"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
@@ -152,7 +157,7 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create session
-	if err := h.sessionMgr.CreateSession(w, r, user.ID, user.Role); err != nil {
+	if err := h.createTrackedSession(w, r, user.ID, user.Role); err != nil {
 		h.errLog.Log(r, "failed to create session", err)
 		http.Redirect(w, r, "/login?error=session_error", http.StatusSeeOther)
 		return
@@ -205,4 +210,47 @@ func generateState() (string, error) {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+// createTrackedSession creates a session in both the cookie and MongoDB for tracking.
+func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
+	// First create the cookie session
+	if err := h.sessionMgr.CreateSession(w, r, userID, role); err != nil {
+		return err
+	}
+
+	// Get the session token that was just created
+	token := h.sessionMgr.GetSessionToken(r)
+	if token == "" {
+		return nil // No tracking if no token
+	}
+
+	// Store session in MongoDB for tracking
+	now := time.Now()
+	session := sessions.Session{
+		Token:        token,
+		UserID:       userID,
+		IPAddress:    getClientIP(r),
+		UserAgent:    r.UserAgent(),
+		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
+		LastActivity: now,
+	}
+
+	// Best effort - don't fail login if tracking fails
+	if err := h.sessionsStore.Create(r.Context(), session); err != nil {
+		h.logger.Warn("failed to track session", zap.Error(err))
+	}
+
+	return nil
+}
+
+// getClientIP extracts the client IP from the request.
+func getClientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return ip
+	}
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	return r.RemoteAddr
 }

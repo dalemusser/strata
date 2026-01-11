@@ -1,6 +1,10 @@
 // internal/app/store/users/fetcher.go
 package userstore
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"context"
 
@@ -46,13 +50,14 @@ func (f *Fetcher) FetchUser(ctx context.Context, userID string) *auth.SessionUse
 	// Fetch the user with projection for only needed fields
 	var u models.User
 	proj := options.FindOne().SetProjection(bson.M{
-		"_id":         1,
-		"full_name":   1,
-		"login_id":    1,
-		"login_id_ci": 1,
-		"auth_method": 1,
-		"role":        1,
-		"status":      1,
+		"_id":              1,
+		"full_name":        1,
+		"login_id":         1,
+		"login_id_ci":      1,
+		"auth_method":      1,
+		"role":             1,
+		"status":           1,
+		"theme_preference": 1,
 	})
 
 	if err := f.users.FindOne(ctx, bson.M{"_id": oid}, proj).Decode(&u); err != nil {
@@ -71,10 +76,11 @@ func (f *Fetcher) FetchUser(ctx context.Context, userID string) *auth.SessionUse
 		loginID = *u.LoginID
 	}
 	su := &auth.SessionUser{
-		ID:      u.ID.Hex(),
-		Name:    u.FullName,
-		LoginID: loginID,
-		Role:    normalize.Role(u.Role),
+		ID:              u.ID.Hex(),
+		Name:            u.FullName,
+		LoginID:         loginID,
+		Role:            normalize.Role(u.Role),
+		ThemePreference: u.ThemePreference,
 	}
 
 	return su

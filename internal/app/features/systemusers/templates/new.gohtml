@@ -1,0 +1,137 @@
+{{ define "systemusers/new" }}
+  {{ template "layout" . }}
+{{ end }}
+
+{{ define "content" }}
+<div class="flex items-center mb-2">
+  <a href="{{ .BackURL }}"
+     class="text-sm px-3 py-1 border dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 mr-2"
+     title="Go back">
+    ← Back
+  </a>
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">👤 Add System User</h1>
+</div>
+
+{{ if .Error }}
+  <div class="mb-3 p-2 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded max-w-xl">
+    {{ .Error }}
+  </div>
+{{ end }}
+
+<form method="post" action="/system-users/new" class="space-y-3 max-w-xl bg-white dark:bg-gray-800 p-4 rounded shadow border dark:border-gray-700">
+  <input type="hidden" name="return" value="{{ .BackURL }}">
+
+  <div>
+    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
+    <input name="full_name" type="text" value="{{ .FullName }}"
+           class="w-full border dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 p-2 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" required />
+  </div>
+
+  <!-- Auth Method -->
+  <div>
+    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Auth Method</label>
+    <select name="auth_method" id="auth-method-select"
+            class="w-full border dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      <option value="trust" {{ if eq .AuthMethod "trust" }}selected{{ end }}>trust</option>
+      <option value="password" {{ if eq .AuthMethod "password" }}selected{{ end }}>password</option>
+      <option value="email" {{ if eq .AuthMethod "email" }}selected{{ end }}>email</option>
+      <option value="google" {{ if eq .AuthMethod "google" }}selected{{ end }}>google</option>
+    </select>
+  </div>
+
+  <!-- Login ID (shown for: trust, password; hidden for: email, google) -->
+  <div id="login-id-section">
+    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Login ID</label>
+    <input name="login_id" id="login-id-input" type="text" value="{{ .LoginID }}"
+           class="w-full border dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+  </div>
+
+  <!-- Email (shown for all, but required for: email, google; optional for others) -->
+  <div id="email-section">
+    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+      Email
+      <span id="email-optional-label" class="text-gray-400 font-normal">(optional)</span>
+    </label>
+    <input name="email" id="email-input" type="email" value="{{ .Email }}"
+           class="w-full border dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+    <p id="email-login-note" class="text-xs text-gray-500 dark:text-gray-400 mt-1 hidden">Email address will be used as the login ID.</p>
+  </div>
+
+  <!-- Password (shown for: password) -->
+  <div id="temp-password-section" class="hidden">
+    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Temporary Password</label>
+    <input name="temp_password" id="temp-password-input" type="text"
+           class="w-full border dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">User will be required to change this password on first login.</p>
+  </div>
+
+  <div class="flex gap-2 pt-2">
+    <button type="submit" class="bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 text-sm">Add System User</button>
+    <a href="{{ .BackURL }}" class="px-3 py-1 border dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">Cancel</a>
+  </div>
+</form>
+
+<script>
+(function() {
+  var authSelect = document.getElementById('auth-method-select');
+  if (!authSelect) return;
+
+  var loginIdSection = document.getElementById('login-id-section');
+  var loginIdInput = document.getElementById('login-id-input');
+  var emailOptionalLabel = document.getElementById('email-optional-label');
+  var emailInput = document.getElementById('email-input');
+  var emailLoginNote = document.getElementById('email-login-note');
+  var passwordSection = document.getElementById('temp-password-section');
+  var passwordInput = document.getElementById('temp-password-input');
+
+  // Methods where email IS the login identity (no separate Login ID field)
+  var emailIsLoginMethods = ['email', 'google'];
+
+  function toggleAuthFields() {
+    var method = authSelect.value;
+    var isEmailLoginMethod = emailIsLoginMethods.indexOf(method) !== -1;
+
+    // Login ID: hide for email/google (email becomes login_id)
+    if (loginIdSection && loginIdInput) {
+      if (isEmailLoginMethod) {
+        loginIdSection.classList.add('hidden');
+        loginIdInput.required = false;
+        loginIdInput.value = '';
+      } else {
+        loginIdSection.classList.remove('hidden');
+        loginIdInput.required = true;
+      }
+    }
+
+    // Email: required for email/google, optional for others
+    if (emailOptionalLabel && emailInput && emailLoginNote) {
+      if (isEmailLoginMethod) {
+        emailOptionalLabel.classList.add('hidden');
+        emailLoginNote.classList.remove('hidden');
+        emailInput.required = true;
+      } else {
+        emailOptionalLabel.classList.remove('hidden');
+        emailLoginNote.classList.add('hidden');
+        emailInput.required = false;
+      }
+    }
+
+    // Password field: show only for 'password' auth
+    if (passwordSection && passwordInput) {
+      if (method === 'password') {
+        passwordSection.classList.remove('hidden');
+        passwordInput.required = true;
+      } else {
+        passwordSection.classList.add('hidden');
+        passwordInput.required = false;
+        passwordInput.value = '';
+      }
+    }
+  }
+
+  authSelect.addEventListener('change', toggleAuthFields);
+  // Initial state check
+  toggleAuthFields();
+})();
+</script>
+{{ end }}

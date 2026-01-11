@@ -1,7 +1,13 @@
 package auth
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,11 +35,12 @@ const (
 *─────────────────────────────────────────────────────────────────────────────*/
 
 const (
-	isAuthKey   = "is_authenticated"
-	userIDKey   = "user_id"
-	userName    = "user_name"
-	userLoginID = "user_login_id"
-	userRole    = "user_role"
+	isAuthKey       = "is_authenticated"
+	userIDKey       = "user_id"
+	userName        = "user_name"
+	userLoginID     = "user_login_id"
+	userRole        = "user_role"
+	sessionTokenKey = "session_token"
 )
 
 /*─────────────────────────────────────────────────────────────────────────────*
@@ -167,10 +174,12 @@ type UserFetcher interface {
 // This data is fetched fresh from the database on each request to ensure
 // role changes, disabled accounts, and profile updates take effect immediately.
 type SessionUser struct {
-	ID      string
-	Name    string
-	LoginID string // User's login identifier
-	Role    string
+	ID              string
+	Name            string
+	LoginID         string // User's login identifier
+	Role            string
+	ThemePreference string // light, dark, system (empty = system)
+	Token           string // Session token for session management
 }
 
 // UserID returns the user's ID as an ObjectID.
@@ -181,6 +190,11 @@ func (u *SessionUser) UserID() primitive.ObjectID {
 		return primitive.NilObjectID
 	}
 	return oid
+}
+
+// SessionToken returns the session token for this user's current session.
+func (u *SessionUser) SessionToken() string {
+	return u.Token
 }
 
 type ctxKey string
@@ -236,12 +250,14 @@ func (sm *SessionManager) LoadSessionUser(next http.Handler) http.Handler {
 
 		if isAuth, _ := sess.Values[isAuthKey].(bool); isAuth {
 			userID := getString(sess, userIDKey)
+			sessionToken := getString(sess, sessionTokenKey)
 
 			// If we have a UserFetcher, get fresh data from DB
 			if sm.userFetcher != nil && userID != "" {
 				u := sm.userFetcher.FetchUser(r.Context(), userID)
 				if u != nil {
-					// User exists and is active - inject into context
+					// User exists and is active - inject session token and inject into context
+					u.Token = sessionToken
 					r = withUser(r, u)
 				} else {
 					// User not found, disabled, or deleted - clear session
@@ -259,6 +275,7 @@ func (sm *SessionManager) LoadSessionUser(next http.Handler) http.Handler {
 					Name:    getString(sess, userName),
 					LoginID: getString(sess, userLoginID),
 					Role:    getString(sess, userRole),
+					Token:   sessionToken,
 				}
 				r = withUser(r, u)
 			}
@@ -439,7 +456,7 @@ func classifySessionError(err error) (sessionErrorType, string) {
 | Session Management                                                           |
 *─────────────────────────────────────────────────────────────────────────────*/
 
-// CreateSession establishes a session for the user.
+// CreateSession establishes a session for the user and returns the session token.
 func (sm *SessionManager) CreateSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
 	sess, err := sm.store.Get(r, sm.name)
 	if err != nil {
@@ -447,11 +464,36 @@ func (sm *SessionManager) CreateSession(w http.ResponseWriter, r *http.Request, 
 		sess, _ = sm.store.New(r, sm.name)
 	}
 
+	// Generate a unique session token for session management
+	token, err := generateSessionToken()
+	if err != nil {
+		return err
+	}
+
 	sess.Values[isAuthKey] = true
 	sess.Values[userIDKey] = userID.Hex()
 	sess.Values[userRole] = role
+	sess.Values[sessionTokenKey] = token
 
 	return sess.Save(r, w)
+}
+
+// GetSessionToken returns the session token from the current request.
+func (sm *SessionManager) GetSessionToken(r *http.Request) string {
+	sess, err := sm.store.Get(r, sm.name)
+	if err != nil {
+		return ""
+	}
+	return getString(sess, sessionTokenKey)
+}
+
+// generateSessionToken generates a random URL-safe token.
+func generateSessionToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }
 
 // DestroySession terminates the user's session.

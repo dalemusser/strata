@@ -1,70 +1,328 @@
-{{/* internal/app/resources/templates/layout.gohtml */}}
 {{ define "layout" }}
 <!DOCTYPE html>
-<html lang="en" class="{{ if eq .ThemePreference "dark" }}dark{{ end }}">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ .Title }} - {{ .SiteName }}</title>
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <title>{{ if .SiteName }}{{ .SiteName }}{{ else }}Strata{{ end }}</title>
+    <link rel="stylesheet" href="/assets/css/tailwind.css">
+    <link rel="stylesheet" href="/assets/css/tiptap.css">
+    <script src="/assets/js/htmx.min.js"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class',
+      // Initialize dark mode before page renders to prevent flash
+      (function() {
+        // Check for theme preference cookie (set on login)
+        var cookies = document.cookie.split(';');
+        var themePref = null;
+        for (var i = 0; i < cookies.length; i++) {
+          var c = cookies[i].trim();
+          if (c.indexOf('theme_pref=') === 0) {
+            themePref = c.substring(11);
+            break;
+          }
         }
+
+        // If we have a preference cookie, apply it and clear the cookie
+        if (themePref) {
+          if (themePref === 'system') {
+            localStorage.removeItem('theme');
+          } else {
+            localStorage.setItem('theme', themePref);
+          }
+          // Clear the cookie
+          document.cookie = 'theme_pref=; path=/; max-age=0';
+        }
+
+        // Apply theme: check localStorage first, then system preference
+        var theme = localStorage.getItem('theme');
+        if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
     </script>
     <style>
-        [x-cloak] { display: none !important; }
+      /* Global loading spinner - shown during HTMX requests */
+      #global-loader {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.3);
+        z-index: 9999;
+        justify-content: center;
+        align-items: center;
+      }
+      #global-loader.active {
+        display: flex;
+      }
+      #global-loader .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid #fff;
+        border-top-color: #4f46e5;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+
+      /* Sidebar collapse styles */
+      #sidebar {
+        transition: width 0.2s ease-in-out;
+      }
+      #sidebar.collapsed {
+        width: 3.5rem;
+        padding: 0.75rem;
+      }
+      #sidebar.collapsed .menu-text,
+      #sidebar.collapsed .menu-header,
+      #sidebar.collapsed .menu-user-info {
+        display: none;
+      }
+      #sidebar.collapsed .menu-link {
+        justify-content: center;
+        font-size: 1.25rem;
+      }
+      #sidebar.collapsed .menu-icon {
+        margin-right: 0;
+      }
+      #sidebar #menu-toggle {
+        transition: transform 0.2s ease-in-out;
+      }
+      #sidebar.collapsed #menu-toggle {
+        transform: rotate(180deg);
+      }
+
+      /* Announcement banner styles */
+      .announcement-banner {
+        font-size: 0.875rem;
+      }
+      .announcement-info {
+        background-color: #dbeafe;
+        color: #1e40af;
+        border-bottom: 1px solid #93c5fd;
+      }
+      .dark .announcement-info {
+        background-color: rgba(59, 130, 246, 0.2);
+        color: #93c5fd;
+        border-bottom-color: rgba(59, 130, 246, 0.3);
+      }
+      .announcement-warning {
+        background-color: #fef3c7;
+        color: #92400e;
+        border-bottom: 1px solid #fcd34d;
+      }
+      .dark .announcement-warning {
+        background-color: rgba(245, 158, 11, 0.2);
+        color: #fcd34d;
+        border-bottom-color: rgba(245, 158, 11, 0.3);
+      }
+      .announcement-critical {
+        background-color: #fee2e2;
+        color: #991b1b;
+        border-bottom: 1px solid #fca5a5;
+      }
+      .dark .announcement-critical {
+        background-color: rgba(239, 68, 68, 0.2);
+        color: #fca5a5;
+        border-bottom-color: rgba(239, 68, 68, 0.3);
+      }
+      .announcement-banner.dismissed {
+        display: none;
+      }
     </style>
-</head>
-<body class="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-    {{ template "nav" . }}
-    <main class="container mx-auto px-4 py-8">
-        {{ template "content" . }}
-    </main>
-    {{ if .FooterHTML }}
-    <footer class="border-t border-gray-200 dark:border-gray-700 py-4 text-center text-sm text-gray-500 dark:text-gray-400">
-        {{ .FooterHTML }}
-    </footer>
-    {{ end }}
-</body>
-</html>
-{{ end }}
+  </head>
 
-{{ define "nav" }}
-<nav class="bg-white dark:bg-gray-800 shadow-sm">
-    <div class="container mx-auto px-4">
-        <div class="flex justify-between items-center py-4">
-            <div class="flex items-center space-x-4">
-                {{ if .LogoURL }}
-                <img src="{{ .LogoURL }}" alt="{{ .SiteName }}" class="h-8">
-                {{ end }}
-                <a href="/" class="text-xl font-bold text-gray-900 dark:text-white">{{ .SiteName }}</a>
-            </div>
-            <div class="flex items-center space-x-4">
-                {{ if .IsLoggedIn }}
-                    {{ if eq .Role "admin" }}
-                    <a href="/dashboard" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Dashboard</a>
-                    <a href="/system-users" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Users</a>
-                    <a href="/audit-log" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Audit Log</a>
-                    <a href="/settings" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Settings</a>
-                    <a href="/admin/pages" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Pages</a>
-                    {{ end }}
-                    <a href="/profile" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Profile</a>
-                    <form action="/logout" method="POST" class="inline">
-                        <button type="submit" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Logout</button>
-                    </form>
-                {{ else }}
-                    <a href="/about" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">About</a>
-                    <a href="/contact" class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Contact</a>
-                    <a href="/login" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Login</a>
-                {{ end }}
-            </div>
-        </div>
+  <body class="h-full bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    <!-- Global loading overlay -->
+    <div id="global-loader">
+      <div class="spinner"></div>
     </div>
-</nav>
-{{ end }}
+    <script>
+      // Show global loader on navigation and HTMX requests
+      (function() {
+        var loader = document.getElementById('global-loader');
+        var requestCount = 0;
 
-{{ define "content" }}
-<h1>Content placeholder</h1>
+        function showLoader() {
+          requestCount++;
+          loader.classList.add('active');
+        }
+
+        function hideLoader() {
+          requestCount--;
+          if (requestCount <= 0) {
+            requestCount = 0;
+            loader.classList.remove('active');
+          }
+        }
+
+        // HTMX requests
+        document.body.addEventListener('htmx:beforeRequest', showLoader);
+        document.body.addEventListener('htmx:afterRequest', hideLoader);
+
+        // Regular link clicks (full page navigation)
+        document.addEventListener('click', function(e) {
+          var link = e.target.closest('a[href]');
+          if (link && !link.hasAttribute('hx-get') && !link.hasAttribute('hx-post') &&
+              !link.getAttribute('href').startsWith('#') &&
+              !link.getAttribute('href').startsWith('javascript:') &&
+              !link.getAttribute('href').startsWith('mailto:') &&
+              !link.getAttribute('href').startsWith('tel:') &&
+              link.getAttribute('target') !== '_blank' &&
+              !link.hasAttribute('download') &&
+              !link.classList.contains('no-loader')) {
+            showLoader();
+          }
+        });
+
+        // Form submissions (non-HTMX)
+        var isNavigating = false;
+        window.addEventListener('beforeunload', function() {
+          isNavigating = true;
+        });
+
+        document.addEventListener('submit', function(e) {
+          var form = e.target;
+          if (!form.hasAttribute('hx-post') && !form.hasAttribute('hx-get')) {
+            showLoader();
+            setTimeout(function() {
+              if (!isNavigating) {
+                hideLoader();
+              }
+            }, 100);
+          }
+        });
+
+        // Hide loader when page is restored from bfcache (browser back/forward)
+        window.addEventListener('pageshow', function(e) {
+          if (e.persisted) {
+            requestCount = 0;
+            loader.classList.remove('active');
+          }
+        });
+      })();
+    </script>
+
+    <div class="flex h-screen">
+      <!-- Sidebar (scrolls independently) -->
+      <aside id="sidebar" class="w-44 bg-white dark:bg-gray-800 shadow-md p-4 flex flex-col overflow-y-auto">
+        {{ template "menu" . }}
+      </aside>
+
+      <!-- Main Content (footer stays at bottom of this area) -->
+      <main class="flex-1 h-screen overflow-hidden bg-gray-100 dark:bg-gray-900 flex flex-col">
+        <!-- Announcement Banners -->
+        {{ if .Announcements }}
+        <div id="announcement-banners" class="announcement-banners">
+          {{ range .Announcements }}
+          <div class="announcement-banner announcement-{{ .Type }}" data-announcement-id="{{ .ID }}"{{ if .Dismissible }} data-dismissible="true"{{ end }}>
+            <div class="flex items-center justify-between px-4 py-2">
+              <div class="flex items-center gap-2">
+                {{ if eq .Type "critical" }}
+                <span class="text-lg">⚠️</span>
+                {{ else if eq .Type "warning" }}
+                <span class="text-lg">⚡</span>
+                {{ else }}
+                <span class="text-lg">ℹ️</span>
+                {{ end }}
+                <span class="font-semibold">{{ .Title }}</span>
+                {{ if .Content }}
+                <span class="opacity-80">— {{ .Content }}</span>
+                {{ end }}
+              </div>
+              {{ if .Dismissible }}
+              <button onclick="dismissAnnouncement('{{ .ID }}')" class="ml-4 opacity-60 hover:opacity-100 text-lg" title="Dismiss">×</button>
+              {{ end }}
+            </div>
+          </div>
+          {{ end }}
+        </div>
+        {{ end }}
+        <div id="content" class="px-4 py-2 overflow-y-auto flex-1">
+          {{ block "content" . }}{{ end }}
+        </div>
+        {{ if .FooterHTML }}
+        <footer class="px-4 py-2 text-center text-sm text-gray-600 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+          {{ .FooterHTML }}
+        </footer>
+        {{ end }}
+      </main>
+    </div>
+
+    <script>
+      // Sidebar collapse toggle
+      (function() {
+        var sidebar = document.getElementById('sidebar');
+        var toggleBtn = document.getElementById('menu-toggle');
+        var storageKey = 'sidebar-collapsed';
+
+        // Restore state from localStorage
+        if (localStorage.getItem(storageKey) === 'true') {
+          sidebar.classList.add('collapsed');
+        }
+
+        if (toggleBtn) {
+          toggleBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            sidebar.classList.toggle('collapsed');
+            localStorage.setItem(storageKey, sidebar.classList.contains('collapsed'));
+          });
+        }
+      })();
+
+      // Dark mode toggle
+      (function() {
+        var darkToggle = document.getElementById('dark-mode-toggle');
+        var darkIcon = document.getElementById('dark-mode-icon');
+        var darkText = document.getElementById('dark-mode-text');
+
+        function updateUI() {
+          var isDark = document.documentElement.classList.contains('dark');
+          if (darkIcon) darkIcon.textContent = isDark ? '☀️' : '🌙';
+          if (darkText) darkText.textContent = isDark ? 'Light Mode' : 'Dark Mode';
+        }
+
+        // Set initial UI state
+        updateUI();
+
+        if (darkToggle) {
+          darkToggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            document.documentElement.classList.toggle('dark');
+            var isDark = document.documentElement.classList.contains('dark');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            updateUI();
+          });
+        }
+      })();
+
+      // Announcement dismissal
+      function dismissAnnouncement(id) {
+        var dismissed = JSON.parse(localStorage.getItem('dismissed-announcements') || '[]');
+        if (dismissed.indexOf(id) === -1) {
+          dismissed.push(id);
+          localStorage.setItem('dismissed-announcements', JSON.stringify(dismissed));
+        }
+        var banner = document.querySelector('[data-announcement-id="' + id + '"]');
+        if (banner) {
+          banner.classList.add('dismissed');
+        }
+      }
+
+      // Hide previously dismissed announcements on page load
+      (function() {
+        var dismissed = JSON.parse(localStorage.getItem('dismissed-announcements') || '[]');
+        dismissed.forEach(function(id) {
+          var banner = document.querySelector('[data-announcement-id="' + id + '"]');
+          if (banner && banner.hasAttribute('data-dismissible')) {
+            banner.classList.add('dismissed');
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
 {{ end }}

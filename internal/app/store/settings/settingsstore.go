@@ -33,7 +33,9 @@ func (s *Store) Get(ctx context.Context) (*models.SiteSettings, error) {
 	if err == mongo.ErrNoDocuments {
 		// Return default settings
 		return &models.SiteSettings{
-			SiteName: models.DefaultSiteName,
+			SiteName:       models.DefaultSiteName,
+			LandingTitle:   models.DefaultLandingTitle,
+			LandingContent: models.DefaultLandingContent,
 		}, nil
 	}
 	if err != nil {
@@ -56,6 +58,8 @@ func (s *Store) Save(ctx context.Context, settings models.SiteSettings) error {
 			"site_name":            settings.SiteName,
 			"logo_path":            settings.LogoPath,
 			"logo_name":            settings.LogoName,
+			"landing_title":        settings.LandingTitle,
+			"landing_content":      settings.LandingContent,
 			"footer_html":          settings.FooterHTML,
 			"enabled_auth_methods": settings.EnabledAuthMethods,
 			"updated_at":           settings.UpdatedAt,
@@ -84,9 +88,12 @@ func (s *Store) Exists(ctx context.Context) (bool, error) {
 
 // UpdateInput holds the fields for updating settings.
 type UpdateInput struct {
-	SiteName   string
-	FooterHTML string
-	LogoURL    string
+	SiteName       string
+	LandingTitle   string
+	LandingContent string
+	FooterHTML     string
+	LogoPath       string
+	LogoName       string
 }
 
 // Upsert updates or inserts site settings from UpdateInput.
@@ -96,11 +103,14 @@ func (s *Store) Upsert(ctx context.Context, input UpdateInput) error {
 	filter := bson.M{"singleton": true}
 	update := bson.M{
 		"$set": bson.M{
-			"singleton":   true,
-			"site_name":   input.SiteName,
-			"footer_html": input.FooterHTML,
-			"logo_path":   input.LogoURL,
-			"updated_at":  now,
+			"singleton":       true,
+			"site_name":       input.SiteName,
+			"landing_title":   input.LandingTitle,
+			"landing_content": input.LandingContent,
+			"footer_html":     input.FooterHTML,
+			"logo_path":       input.LogoPath,
+			"logo_name":       input.LogoName,
+			"updated_at":      now,
 		},
 		"$setOnInsert": bson.M{
 			"_id": primitive.NewObjectID(),

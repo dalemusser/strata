@@ -1,15 +1,17 @@
 // internal/app/bootstrap/startup.go
 package bootstrap
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"context"
 	"strings"
 	"time"
 
 	"github.com/dalemusser/strata/internal/app/resources"
-	"github.com/dalemusser/strata/internal/app/store/audit"
-	"github.com/dalemusser/strata/internal/app/store/emailverify"
-	"github.com/dalemusser/strata/internal/app/store/sessions"
+	"github.com/dalemusser/strata/internal/app/system/tasks"
 	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/config"
 	"github.com/dalemusser/waffle/pantry/text"
@@ -43,26 +45,8 @@ import (
 func Startup(ctx context.Context, coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, logger *zap.Logger) error {
 	resources.LoadSharedTemplates()
 
-	// Ensure indexes for email verification store
-	emailVerifyStore := emailverify.New(deps.MongoDatabase, appCfg.EmailVerifyExpiry)
-	if err := emailVerifyStore.EnsureIndexes(ctx); err != nil {
-		logger.Error("failed to ensure email verify indexes", zap.Error(err))
-		return err
-	}
-
-	// Ensure indexes for audit store
-	auditStore := audit.New(deps.MongoDatabase)
-	if err := auditStore.EnsureIndexes(ctx); err != nil {
-		logger.Error("failed to ensure audit indexes", zap.Error(err))
-		return err
-	}
-
-	// Ensure indexes for sessions store (activity tracking)
-	sessionsStore := sessions.New(deps.MongoDatabase)
-	if err := sessionsStore.EnsureIndexes(ctx); err != nil {
-		logger.Error("failed to ensure sessions indexes", zap.Error(err))
-		return err
-	}
+	// Note: Indexes are created in EnsureSchema via indexes.EnsureAll().
+	// Store-level EnsureIndexes() calls are not needed here.
 
 	// Seed admin user if configured
 	if appCfg.SeedAdminEmail != "" {
@@ -72,7 +56,28 @@ func Startup(ctx context.Context, coreCfg *config.CoreConfig, appCfg AppConfig, 
 		}
 	}
 
+	// Start background task runner
+	startTaskRunner(deps.MongoDatabase, logger)
+
 	return nil
+}
+
+// taskRunner is the global task runner instance, used for graceful shutdown.
+var taskRunner *tasks.Runner
+
+// startTaskRunner initializes and starts the background task runner.
+func startTaskRunner(db *mongo.Database, logger *zap.Logger) {
+	taskRunner = tasks.New(logger)
+
+	// Register cleanup jobs
+	taskRunner.Register(tasks.SessionCleanupJob(db, logger))
+	taskRunner.Register(tasks.InvitationCleanupJob(db, logger))
+	taskRunner.Register(tasks.PasswordResetCleanupJob(db, logger))
+	taskRunner.Register(tasks.OAuthStateCleanupJob(db, logger))
+	taskRunner.Register(tasks.EmailVerificationCleanupJob(db, logger))
+
+	// Start running jobs
+	taskRunner.Start()
 }
 
 // ensureAdminUser ensures an admin user exists with the given login_id.

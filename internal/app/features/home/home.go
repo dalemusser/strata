@@ -2,9 +2,13 @@
 package home
 
 import (
+	"html/template"
 	"net/http"
 
+	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
+	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
+	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -28,6 +32,9 @@ func NewHandler(db *mongo.Database, logger *zap.Logger) *Handler {
 // HomeVM is the view model for the home page.
 type HomeVM struct {
 	viewdata.BaseVM
+	LandingTitle string        // Title for landing page
+	Content      template.HTML // Landing page content (HTML)
+	CanEdit      bool          // True if user can edit the landing page
 }
 
 // Routes returns a chi.Router with home routes mounted.
@@ -43,6 +50,31 @@ func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 		BaseVM: viewdata.New(r),
 	}
 	vm.Title = "Home"
+
+	// Check if user can edit (admin role)
+	if user, ok := auth.CurrentUser(r); ok && user.Role == "admin" {
+		vm.CanEdit = true
+	}
+
+	// Get landing page title and content from settings
+	store := settingsstore.New(h.db)
+	settings, err := store.Get(r.Context())
+	if err != nil {
+		h.logger.Warn("failed to load settings for landing page", zap.Error(err))
+		vm.LandingTitle = models.DefaultLandingTitle
+		vm.Content = template.HTML(models.DefaultLandingContent)
+	} else {
+		// Settings store returns defaults if no document exists
+		vm.LandingTitle = settings.LandingTitle
+		if vm.LandingTitle == "" {
+			vm.LandingTitle = models.DefaultLandingTitle
+		}
+		if settings.LandingContent == "" {
+			vm.Content = template.HTML(models.DefaultLandingContent)
+		} else {
+			vm.Content = template.HTML(settings.LandingContent)
+		}
+	}
 
 	templates.Render(w, r, "home/index", vm)
 }

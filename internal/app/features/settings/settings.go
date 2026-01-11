@@ -2,7 +2,13 @@
 package settings
 
 import (
+	"context"
+	"fmt"
+	"html/template"
+	"io"
 	"net/http"
+	"path/filepath"
+	"time"
 
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
 	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
@@ -11,6 +17,7 @@ import (
 	"github.com/dalemusser/waffle/pantry/storage"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
@@ -41,17 +48,20 @@ func NewHandler(
 // SettingsVM is the view model for the settings page.
 type SettingsVM struct {
 	viewdata.BaseVM
-	Settings *models.SiteSettings
-	Success  string
-	Error    string
+	Settings       *models.SiteSettings
+	LandingTitle   string // Landing page title (with default if empty)
+	LandingContent string // Landing page content
+	HasLogo        bool   // Whether a logo is uploaded
+	LogoURL        string // Generated URL for the logo
+	LogoName       string // Original filename of the logo
+	Success        string
+	Error          string
 }
 
 // MountRoutes mounts settings routes on the given router.
 func (h *Handler) MountRoutes(r chi.Router) {
 	r.Get("/", h.show)
 	r.Post("/", h.update)
-	r.Post("/logo", h.uploadLogo)
-	r.Delete("/logo", h.deleteLogo)
 }
 
 // show displays the settings page.
@@ -69,11 +79,30 @@ func (h *Handler) show(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Use default landing title if empty so admin has something to work with
+	landingTitle := settings.LandingTitle
+	if landingTitle == "" {
+		landingTitle = models.DefaultLandingTitle
+	}
+
+	// Generate logo URL if exists
+	var logoURL string
+	if settings.HasLogo() {
+		logoURL = h.fileStorage.URL(settings.LogoPath)
+	}
+
 	vm := SettingsVM{
-		BaseVM:   viewdata.New(r),
-		Settings: settings,
+		BaseVM:         viewdata.New(r),
+		Settings:       settings,
+		LandingTitle:   landingTitle,
+		LandingContent: settings.LandingContent,
+		HasLogo:        settings.HasLogo(),
+		LogoURL:        logoURL,
+		LogoName:       settings.LogoName,
 	}
 	vm.Title = "Site Settings"
+	vm.SiteName = settings.SiteName
+	vm.FooterHTML = template.HTML(settings.FooterHTML)
 
 	if r.URL.Query().Get("success") == "1" {
 		vm.Success = "Settings updated successfully"
@@ -82,114 +111,133 @@ func (h *Handler) show(w http.ResponseWriter, r *http.Request) {
 	templates.Render(w, r, "settings/show", vm)
 }
 
-// update saves the settings.
+// update saves the settings including logo handling.
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
+	// Parse multipart form for file uploads (10MB max)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		h.errLog.Log(r, "failed to parse form", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
-	input := settingsstore.UpdateInput{
-		SiteName:   r.FormValue("site_name"),
-		FooterHTML: r.FormValue("footer_html"),
+	ctx := r.Context()
+	siteName := r.FormValue("site_name")
+	landingTitle := r.FormValue("landing_title")
+	landingContent := r.FormValue("landing_content")
+	footerHTML := r.FormValue("footer_html")
+	removeLogo := r.FormValue("remove_logo") != ""
+
+	// Get current settings for logo handling
+	current, _ := h.settingsStore.Get(ctx)
+	if current == nil {
+		current = &models.SiteSettings{}
 	}
 
-	if err := h.settingsStore.Upsert(r.Context(), input); err != nil {
-		h.errLog.Log(r, "failed to update settings", err)
+	// Handle logo upload/removal
+	logoPath := current.LogoPath
+	logoName := current.LogoName
 
-		settings, _ := h.settingsStore.Get(r.Context())
-		vm := SettingsVM{
-			BaseVM:   viewdata.New(r),
-			Settings: settings,
-			Error:    "Failed to save settings",
+	if removeLogo {
+		// Delete old logo if exists
+		if current.HasLogo() {
+			if err := h.fileStorage.Delete(ctx, current.LogoPath); err != nil {
+				h.logger.Warn("failed to delete old logo", zap.String("path", current.LogoPath), zap.Error(err))
+			}
 		}
-		templates.Render(w, r, "settings/show", vm)
+		logoPath = ""
+		logoName = ""
+	}
+
+	// Check for new logo upload
+	file, header, fileErr := r.FormFile("logo")
+	hasNewLogo := fileErr == nil && header != nil && header.Size > 0
+	if hasNewLogo {
+		defer file.Close()
+
+		// Delete old logo if exists
+		if current.HasLogo() {
+			if err := h.fileStorage.Delete(ctx, current.LogoPath); err != nil {
+				h.logger.Warn("failed to delete old logo", zap.String("path", current.LogoPath), zap.Error(err))
+			}
+		}
+
+		// Upload new logo with unique path
+		newPath, err := h.uploadLogoFile(ctx, header.Filename, file, header.Header.Get("Content-Type"))
+		if err != nil {
+			h.logger.Error("logo upload failed", zap.Error(err))
+			h.renderSettingsWithError(w, r, "Failed to upload logo. Please try again.")
+			return
+		}
+		logoPath = newPath
+		logoName = header.Filename
+	}
+
+	input := settingsstore.UpdateInput{
+		SiteName:       siteName,
+		LandingTitle:   landingTitle,
+		LandingContent: landingContent,
+		FooterHTML:     footerHTML,
+		LogoPath:       logoPath,
+		LogoName:       logoName,
+	}
+
+	if err := h.settingsStore.Upsert(ctx, input); err != nil {
+		h.errLog.Log(r, "failed to update settings", err)
+		h.renderSettingsWithError(w, r, "Failed to save settings")
 		return
 	}
 
 	http.Redirect(w, r, "/settings?success=1", http.StatusSeeOther)
 }
 
-// uploadLogo handles logo upload.
-func (h *Handler) uploadLogo(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10 MB max
-		h.errLog.Log(r, "failed to parse multipart form", err)
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
-	file, header, err := r.FormFile("logo")
-	if err != nil {
-		h.errLog.Log(r, "failed to get uploaded file", err)
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	// Generate filename
-	filename := "uploads/logo-" + header.Filename
-
-	// Upload to storage
-	opts := &storage.PutOptions{
-		ContentType: header.Header.Get("Content-Type"),
-	}
-	if err := h.fileStorage.Put(r.Context(), filename, file, opts); err != nil {
-		h.errLog.Log(r, "failed to upload logo", err)
-		http.Error(w, "Failed to upload logo", http.StatusInternalServerError)
-		return
-	}
-
-	// Generate URL for the uploaded file (assuming local storage serves at /uploads/)
-	url := "/uploads/" + filename
-
-	// Update settings with new logo URL
+// renderSettingsWithError re-renders the settings page with an error message.
+func (h *Handler) renderSettingsWithError(w http.ResponseWriter, r *http.Request, errMsg string) {
 	settings, _ := h.settingsStore.Get(r.Context())
 	if settings == nil {
-		settings = &models.SiteSettings{}
+		settings = &models.SiteSettings{SiteName: "Strata"}
 	}
 
-	input := settingsstore.UpdateInput{
-		SiteName:   settings.SiteName,
-		FooterHTML: settings.FooterHTML,
-		LogoURL:    url,
+	landingTitle := settings.LandingTitle
+	if landingTitle == "" {
+		landingTitle = models.DefaultLandingTitle
 	}
 
-	if err := h.settingsStore.Upsert(r.Context(), input); err != nil {
-		h.errLog.Log(r, "failed to save logo URL", err)
-		http.Error(w, "Failed to save settings", http.StatusInternalServerError)
-		return
+	var logoURL string
+	if settings.HasLogo() {
+		logoURL = h.fileStorage.URL(settings.LogoPath)
 	}
 
-	http.Redirect(w, r, "/settings?success=1", http.StatusSeeOther)
+	vm := SettingsVM{
+		BaseVM:         viewdata.New(r),
+		Settings:       settings,
+		LandingTitle:   landingTitle,
+		LandingContent: settings.LandingContent,
+		HasLogo:        settings.HasLogo(),
+		LogoURL:        logoURL,
+		LogoName:       settings.LogoName,
+		Error:          errMsg,
+	}
+	vm.Title = "Site Settings"
+	vm.SiteName = settings.SiteName
+	vm.FooterHTML = template.HTML(settings.FooterHTML)
+
+	templates.Render(w, r, "settings/show", vm)
 }
 
-// deleteLogo removes the logo.
-func (h *Handler) deleteLogo(w http.ResponseWriter, r *http.Request) {
-	settings, _ := h.settingsStore.Get(r.Context())
-	if settings == nil || settings.LogoPath == "" {
-		http.Redirect(w, r, "/settings", http.StatusSeeOther)
-		return
+// uploadLogoFile stores a logo file with a unique path and returns the storage path.
+func (h *Handler) uploadLogoFile(ctx context.Context, filename string, file io.Reader, contentType string) (string, error) {
+	// Generate unique path: logos/YYYY/MM/uuid-ext
+	now := time.Now().UTC()
+	ext := filepath.Ext(filename)
+	uniqueName := fmt.Sprintf("%s%s", uuid.New().String()[:8], ext)
+	path := fmt.Sprintf("logos/%04d/%02d/%s", now.Year(), now.Month(), uniqueName)
+
+	opts := &storage.PutOptions{
+		ContentType: contentType,
+	}
+	if err := h.fileStorage.Put(ctx, path, file, opts); err != nil {
+		return "", fmt.Errorf("failed to upload logo: %w", err)
 	}
 
-	// Delete from storage
-	if err := h.fileStorage.Delete(r.Context(), settings.LogoPath); err != nil {
-		h.logger.Warn("failed to delete logo file", zap.Error(err))
-		// Continue anyway - file may not exist
-	}
-
-	// Clear logo URL in settings
-	input := settingsstore.UpdateInput{
-		SiteName:   settings.SiteName,
-		FooterHTML: settings.FooterHTML,
-		LogoURL:    "",
-	}
-
-	if err := h.settingsStore.Upsert(r.Context(), input); err != nil {
-		h.errLog.Log(r, "failed to clear logo URL", err)
-		http.Error(w, "Failed to save settings", http.StatusInternalServerError)
-		return
-	}
-
-	http.Redirect(w, r, "/settings?success=1", http.StatusSeeOther)
+	return path, nil
 }

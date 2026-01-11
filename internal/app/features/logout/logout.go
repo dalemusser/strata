@@ -47,6 +47,13 @@ func Routes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if user, ok := auth.CurrentUser(r); ok {
 		h.auditLogger.Logout(r.Context(), r, user.ID)
+
+		// Delete session from MongoDB tracking
+		if token := user.SessionToken(); token != "" {
+			if err := h.sessionsStore.Delete(r.Context(), token); err != nil {
+				h.logger.Warn("failed to delete session from store", zap.Error(err))
+			}
+		}
 	}
 
 	h.sessionMgr.DestroySession(w, r)

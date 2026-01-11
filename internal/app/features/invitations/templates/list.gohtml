@@ -1,0 +1,70 @@
+{{ define "invitations/list" }}
+  {{ template "layout" . }}
+{{ end }}
+
+{{ define "content" }}
+<div class="flex flex-col h-full">
+<div class="mb-4 flex items-center justify-between">
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Invitations</h1>
+  <a href="/invitations/new" class="px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">
+    Send Invitation
+  </a>
+</div>
+
+<div class="p-4 bg-white dark:bg-gray-800 rounded shadow text-gray-700 dark:text-gray-300 text-sm flex-1 mb-2">
+  {{ if .Success }}
+    <div class="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 p-2 rounded mb-4">
+      {{ .Success }}
+    </div>
+  {{ end }}
+
+  {{ if .Error }}
+    <div class="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 p-2 rounded mb-4">
+      {{ .Error }}
+    </div>
+  {{ end }}
+
+  {{ if .Invitations }}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b dark:border-gray-700">
+          <th class="text-left py-2 px-2 font-semibold">Email</th>
+          <th class="text-left py-2 px-2 font-semibold">Role</th>
+          <th class="text-left py-2 px-2 font-semibold">Expires</th>
+          <th class="text-right py-2 px-2 font-semibold">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Invitations }}
+        <tr class="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+          <td class="py-2 px-2">{{ .Email }}</td>
+          <td class="py-2 px-2 capitalize">{{ .Role }}</td>
+          <td class="py-2 px-2">
+            {{ if .Expired }}
+              <span class="text-red-600 dark:text-red-400">Expired</span>
+            {{ else }}
+              {{ .ExpiresAt.Format "Jan 2, 2006 3:04 PM" }}
+            {{ end }}
+          </td>
+          <td class="py-2 px-2 text-right">
+            <form method="POST" action="/invitations/{{ .ID }}/resend" class="inline">
+              <button type="submit" class="text-indigo-600 dark:text-indigo-400 hover:underline mr-2"
+                      onclick="return confirm('Resend invitation to {{ .Email }}?');">Resend</button>
+            </form>
+            <form method="POST" action="/invitations/{{ .ID }}/revoke" class="inline">
+              <button type="submit" class="text-red-600 dark:text-red-400 hover:underline"
+                      onclick="return confirm('Revoke invitation for {{ .Email }}?');">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {{ end }}
+      </tbody>
+    </table>
+  {{ else }}
+    <p class="text-gray-500 dark:text-gray-400 py-4 text-center">
+      No pending invitations. <a href="/invitations/new" class="text-indigo-600 dark:text-indigo-400 hover:underline">Send one now</a>.
+    </p>
+  {{ end }}
+</div>
+</div>
+{{ end }}

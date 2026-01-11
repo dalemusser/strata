@@ -1,0 +1,99 @@
+{{ define "announcements/list" }}
+  {{ template "layout" . }}
+{{ end }}
+
+{{ define "content" }}
+<div class="flex flex-col h-full">
+<div class="mb-4 flex items-center justify-between">
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Announcements</h1>
+  <a href="/announcements/new" class="px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">
+    New Announcement
+  </a>
+</div>
+
+<div class="p-4 bg-white dark:bg-gray-800 rounded shadow text-gray-700 dark:text-gray-300 text-sm flex-1 mb-2">
+  {{ if .Success }}
+    <div class="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 p-2 rounded mb-4">
+      {{ .Success }}
+    </div>
+  {{ end }}
+
+  {{ if .Error }}
+    <div class="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 p-2 rounded mb-4">
+      {{ .Error }}
+    </div>
+  {{ end }}
+
+  {{ if .Items }}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b dark:border-gray-700">
+          <th class="text-left py-2 px-2 font-semibold">Title</th>
+          <th class="text-left py-2 px-2 font-semibold">Type</th>
+          <th class="text-left py-2 px-2 font-semibold">Status</th>
+          <th class="text-left py-2 px-2 font-semibold">Schedule</th>
+          <th class="text-right py-2 px-2 font-semibold">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Items }}
+        <tr class="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+          <td class="py-2 px-2">
+            <a href="/announcements/{{ .ID }}/edit" class="text-indigo-600 dark:text-indigo-400 hover:underline">
+              {{ .Title }}
+            </a>
+            {{ if .Dismissible }}
+              <span class="text-xs text-gray-400">(dismissible)</span>
+            {{ end }}
+          </td>
+          <td class="py-2 px-2">
+            {{ if eq .Type "critical" }}
+              <span class="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-2 py-0.5 rounded">critical</span>
+            {{ else if eq .Type "warning" }}
+              <span class="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 rounded">warning</span>
+            {{ else }}
+              <span class="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-2 py-0.5 rounded">info</span>
+            {{ end }}
+          </td>
+          <td class="py-2 px-2">
+            {{ if .Active }}
+              <span class="text-green-600 dark:text-green-400">Active</span>
+            {{ else }}
+              <span class="text-gray-400">Inactive</span>
+            {{ end }}
+          </td>
+          <td class="py-2 px-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ if .StartsAt }}
+              <div>Starts: {{ .StartsAt }}</div>
+            {{ end }}
+            {{ if .EndsAt }}
+              <div>Ends: {{ .EndsAt }}</div>
+            {{ end }}
+            {{ if and (not .StartsAt) (not .EndsAt) }}
+              <span>Always</span>
+            {{ end }}
+          </td>
+          <td class="py-2 px-2 text-right space-x-2">
+            <form method="POST" action="/announcements/{{ .ID }}/toggle" class="inline">
+              <button type="submit" class="text-indigo-600 dark:text-indigo-400 hover:underline">
+                {{ if .Active }}Deactivate{{ else }}Activate{{ end }}
+              </button>
+            </form>
+            <a href="/announcements/{{ .ID }}/edit" class="text-indigo-600 dark:text-indigo-400 hover:underline">Edit</a>
+            <form method="POST" action="/announcements/{{ .ID }}/delete" class="inline">
+              <button type="submit" class="text-red-600 dark:text-red-400 hover:underline"
+                      onclick="return confirm('Delete this announcement?');">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{ end }}
+      </tbody>
+    </table>
+  {{ else }}
+    <p class="text-gray-500 dark:text-gray-400 py-4 text-center">
+      No announcements. <a href="/announcements/new" class="text-indigo-600 dark:text-indigo-400 hover:underline">Create one now</a>.
+    </p>
+  {{ end }}
+</div>
+</div>
+{{ end }}

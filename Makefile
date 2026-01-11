@@ -1,6 +1,6 @@
 # Strata Makefile
 
-.PHONY: build run test clean dev seed-admin tidy
+.PHONY: build run test clean dev seed-admin tidy css css-watch css-prod setup setup-tailwind
 
 # Build the application
 build:
@@ -70,18 +70,81 @@ build-prod:
 docker-build:
 	docker build -t strata:latest .
 
+# Tailwind CSS variables
+CSS_INPUT  = ./internal/app/resources/assets/css/src/input.css
+CSS_OUTPUT = ./internal/app/resources/assets/css/tailwind.css
+
+# Build Tailwind CSS
+css:
+	./tailwindcss -i $(CSS_INPUT) -o $(CSS_OUTPUT)
+
+# Watch Tailwind CSS for changes (development)
+css-watch:
+	./tailwindcss -i $(CSS_INPUT) -o $(CSS_OUTPUT) --watch
+
+# Build minified Tailwind CSS (production)
+css-prod:
+	./tailwindcss -i $(CSS_INPUT) -o $(CSS_OUTPUT) --minify
+
+# Download Tailwind CSS standalone CLI for current platform
+setup-tailwind:
+	@echo "Detecting platform..."
+	@OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	ARCH=$$(uname -m); \
+	if [ "$$OS" = "darwin" ]; then \
+		if [ "$$ARCH" = "arm64" ]; then \
+			URL="https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-macos-arm64"; \
+		else \
+			URL="https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-macos-x64"; \
+		fi; \
+	elif [ "$$OS" = "linux" ]; then \
+		if [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+			URL="https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-arm64"; \
+		else \
+			URL="https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64"; \
+		fi; \
+	else \
+		echo "Unsupported platform: $$OS/$$ARCH"; exit 1; \
+	fi; \
+	echo "Downloading Tailwind CSS from $$URL..."; \
+	curl -sL "$$URL" -o tailwindcss && chmod +x tailwindcss
+	@echo "Tailwind CSS installed successfully"
+
+# Set up development environment (run after git clone)
+setup: setup-tailwind
+	@echo "Development environment setup complete"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Copy config.example.toml to config.toml"
+	@echo "  2. Update config.toml with your settings"
+	@echo "  3. Run 'make css' to build Tailwind CSS"
+	@echo "  4. Run 'make dev' to start the development server"
+
 # Show help
 help:
 	@echo "Strata Makefile targets:"
+	@echo ""
+	@echo "Development:"
 	@echo "  build       - Build the application"
 	@echo "  run         - Build and run the application"
 	@echo "  dev         - Run in development mode"
 	@echo "  test        - Run tests"
 	@echo "  test-cover  - Run tests with coverage"
+	@echo "  fmt         - Format code"
+	@echo "  lint        - Lint code"
+	@echo ""
+	@echo "CSS:"
+	@echo "  css         - Build Tailwind CSS"
+	@echo "  css-watch   - Watch and rebuild Tailwind CSS"
+	@echo "  css-prod    - Build minified Tailwind CSS"
+	@echo ""
+	@echo "Setup:"
+	@echo "  setup           - Set up development environment"
+	@echo "  setup-tailwind  - Download Tailwind CSS standalone CLI"
+	@echo ""
+	@echo "Other:"
 	@echo "  clean       - Clean build artifacts"
 	@echo "  tidy        - Tidy dependencies"
 	@echo "  seed-admin  - Seed admin user (EMAIL=... required)"
-	@echo "  fmt         - Format code"
-	@echo "  lint        - Lint code"
 	@echo "  build-prod  - Build for production"
 	@echo "  help        - Show this help"

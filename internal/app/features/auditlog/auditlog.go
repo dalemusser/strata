@@ -1,6 +1,10 @@
 // internal/app/features/auditlog/auditlog.go
 package auditlog
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"net/http"
 	"strconv"
@@ -10,6 +14,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/store/audit"
 	userstore "github.com/dalemusser/strata/internal/app/store/users"
 	"github.com/dalemusser/strata/internal/app/system/auth"
+	"github.com/dalemusser/strata/internal/app/system/timezones"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/pantry/templates"
@@ -44,19 +49,23 @@ func NewHandler(
 // EventDisplay represents an audit event for display.
 type EventDisplay struct {
 	audit.Event
-	UserName  string
-	ActorName string
+	UserName    string
+	UserLoginID string
+	ActorName   string
 }
 
 // ListVM is the view model for the audit log list.
 type ListVM struct {
 	viewdata.BaseVM
-	Events     []EventDisplay
-	Filter     FilterParams
-	TotalCount int64
-	Page       int
-	PageSize   int
-	TotalPages int
+	Events         []EventDisplay
+	Filter         FilterParams
+	TotalCount     int64
+	Page           int
+	PrevPage       int
+	NextPage       int
+	PageSize       int
+	TotalPages     int
+	TimezoneGroups []timezones.ZoneGroup
 }
 
 // FilterParams represents the filter parameters.
@@ -158,6 +167,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		if e.UserID != nil {
 			if user, ok := userMap[*e.UserID]; ok {
 				display.UserName = user.FullName
+				if user.LoginID != nil {
+					display.UserLoginID = *user.LoginID
+				}
 			}
 		}
 		if e.ActorID != nil {
@@ -173,6 +185,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		totalPages++
 	}
 
+	// Get timezone groups for selector
+	tzGroups, _ := timezones.Groups()
+
 	vm := ListVM{
 		BaseVM: viewdata.New(r),
 		Events: displayEvents,
@@ -183,10 +198,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			StartDate: q.Get("start_date"),
 			EndDate:   q.Get("end_date"),
 		},
-		TotalCount: totalCount,
-		Page:       page,
-		PageSize:   pageSize,
-		TotalPages: totalPages,
+		TotalCount:     totalCount,
+		Page:           page,
+		PrevPage:       page - 1,
+		NextPage:       page + 1,
+		PageSize:       pageSize,
+		TotalPages:     totalPages,
+		TimezoneGroups: tzGroups,
 	}
 	vm.Title = "Audit Log"
 

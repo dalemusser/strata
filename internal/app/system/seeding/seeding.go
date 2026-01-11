@@ -38,7 +38,7 @@ func seedPages(ctx context.Context, db *mongo.Database, logger *zap.Logger) erro
 <p>Add your contact information, email addresses, phone numbers, or a contact form here.</p>`,
 		},
 		{
-			Slug:  models.PageSlugTermsOfService,
+			Slug:  models.PageSlugTerms,
 			Title: "Terms of Service",
 			Content: `<h2>Terms of Service</h2>
 <p>This page should contain your Terms of Service. An administrator should update this content.</p>
@@ -53,7 +53,7 @@ func seedPages(ctx context.Context, db *mongo.Database, logger *zap.Logger) erro
 </ul>`,
 		},
 		{
-			Slug:  models.PageSlugPrivacyPolicy,
+			Slug:  models.PageSlugPrivacy,
 			Title: "Privacy Policy",
 			Content: `<h2>Privacy Policy</h2>
 <p>This page should contain your Privacy Policy. An administrator should update this content.</p>

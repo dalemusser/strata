@@ -28,6 +28,12 @@ import (
 // from exiting. However, returning nil on success helps ensure clean shutdown
 // behavior and accurate logging.
 func Shutdown(ctx context.Context, coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, logger *zap.Logger) error {
+	// Stop background task runner
+	if taskRunner != nil {
+		logger.Info("stopping background task runner")
+		taskRunner.Stop()
+	}
+
 	if deps.MongoClient != nil {
 		logger.Info("disconnecting MongoDB client")
 		if err := deps.MongoClient.Disconnect(ctx); err != nil {

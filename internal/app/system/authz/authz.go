@@ -1,6 +1,10 @@
 // internal/app/system/authz/authz.go
 package authz
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"net/http"
 	"strings"
@@ -52,4 +56,14 @@ func HasRole(r *http.Request, roles ...string) bool {
 		}
 	}
 	return false
+}
+
+// ThemePreference returns the user's theme preference from the request context.
+// Returns empty string if no user is logged in, which templates treat as "system".
+func ThemePreference(r *http.Request) string {
+	user, ok := auth.CurrentUser(r)
+	if !ok {
+		return ""
+	}
+	return user.ThemePreference
 }

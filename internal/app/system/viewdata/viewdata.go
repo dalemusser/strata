@@ -1,6 +1,10 @@
 // internal/app/system/viewdata/viewdata.go
 package viewdata
 
+// Terminology: User Identifiers
+//   - UserID / userID / user_id: The MongoDB ObjectID (_id) that uniquely identifies a user record
+//   - LoginID / loginID / login_id: The human-readable string users type to log in
+
 import (
 	"context"
 	"html/template"
@@ -14,6 +18,15 @@ import (
 	"github.com/dalemusser/waffle/pantry/storage"
 	"go.mongodb.org/mongo-driver/mongo"
 )
+
+// AnnouncementVM represents an announcement for display in templates.
+type AnnouncementVM struct {
+	ID          string
+	Title       string
+	Content     string
+	Type        string // info, warning, critical
+	Dismissible bool
+}
 
 // BaseVM contains common fields for all view models.
 // Embed this struct in your feature-specific view models.
@@ -36,23 +49,44 @@ type BaseVM struct {
 	FooterHTML template.HTML
 
 	// User context (from auth middleware)
-	IsLoggedIn bool
-	Role       string
-	UserName   string
+	IsLoggedIn      bool
+	UserID          string
+	Role            string
+	UserName        string
+	ThemePreference string // light, dark, system (empty = system)
 
 	// Page context
 	Title       string
 	BackURL     string
 	CurrentPath string
+
+	// Announcements for banner display
+	Announcements []AnnouncementVM
 }
 
 // storageProvider is set by Init and used to generate logo URLs.
 var storageProvider storage.Store
 
-// Init sets the storage provider for generating logo URLs.
+// globalDB is set by Init and used by New() to load settings.
+var globalDB *mongo.Database
+
+// AnnouncementLoader is a function that loads active announcements.
+// This is set by bootstrap to avoid circular dependencies.
+type AnnouncementLoader func(ctx context.Context) []AnnouncementVM
+
+var announcementLoader AnnouncementLoader
+
+// Init sets the storage provider and database for viewdata.
 // Call this once at startup from bootstrap.
-func Init(store storage.Store) {
+func Init(store storage.Store, db *mongo.Database) {
 	storageProvider = store
+	globalDB = db
+}
+
+// SetAnnouncementLoader sets the function used to load active announcements.
+// Call this once at startup from bootstrap after the announcement store is available.
+func SetAnnouncementLoader(loader AnnouncementLoader) {
+	announcementLoader = loader
 }
 
 // NewBaseVM creates a fully populated BaseVM for a page.
@@ -64,16 +98,18 @@ func Init(store storage.Store) {
 //   - title: the page title
 //   - backDefault: default URL for the back button if none in request
 func NewBaseVM(r *http.Request, db *mongo.Database, title, backDefault string) BaseVM {
-	role, name, _, signedIn := authz.UserCtx(r)
+	role, name, userID, signedIn := authz.UserCtx(r)
 
 	vm := BaseVM{
-		SiteName:    models.DefaultSiteName,
-		IsLoggedIn:  signedIn,
-		Role:        role,
-		UserName:    name,
-		Title:       title,
-		BackURL:     httpnav.ResolveBackURL(r, backDefault),
-		CurrentPath: httpnav.CurrentPath(r),
+		SiteName:        models.DefaultSiteName,
+		IsLoggedIn:      signedIn,
+		UserID:          userID.Hex(),
+		Role:            role,
+		UserName:        name,
+		ThemePreference: authz.ThemePreference(r),
+		Title:           title,
+		BackURL:         httpnav.ResolveBackURL(r, backDefault),
+		CurrentPath:     httpnav.CurrentPath(r),
 	}
 
 	if db != nil {
@@ -89,6 +125,11 @@ func NewBaseVM(r *http.Request, db *mongo.Database, title, backDefault string) B
 				vm.LogoURL = storageProvider.URL(settings.LogoPath)
 			}
 		}
+	}
+
+	// Load active announcements if loader is configured
+	if announcementLoader != nil {
+		vm.Announcements = announcementLoader(r.Context())
 	}
 
 	return vm
@@ -130,17 +171,41 @@ func GetSettings(ctx context.Context, db *mongo.Database) models.SiteSettings {
 	return *settings
 }
 
-// New creates a BaseVM with minimal initialization from the request.
-// This is a convenience method that doesn't require a database connection.
-// Use NewBaseVM for full site settings loading.
+// New creates a BaseVM with site settings loaded from the database.
+// This is the standard way to create a BaseVM for most handlers.
 func New(r *http.Request) BaseVM {
-	role, name, _, signedIn := authz.UserCtx(r)
+	role, name, userID, signedIn := authz.UserCtx(r)
 
-	return BaseVM{
-		SiteName:    models.DefaultSiteName,
-		IsLoggedIn:  signedIn,
-		Role:        role,
-		UserName:    name,
-		CurrentPath: httpnav.CurrentPath(r),
+	vm := BaseVM{
+		SiteName:        models.DefaultSiteName,
+		IsLoggedIn:      signedIn,
+		UserID:          userID.Hex(),
+		Role:            role,
+		UserName:        name,
+		ThemePreference: authz.ThemePreference(r),
+		CurrentPath:     httpnav.CurrentPath(r),
 	}
+
+	// Load site settings if database is available
+	if globalDB != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), timeouts.Short())
+		defer cancel()
+
+		store := settingsstore.New(globalDB)
+		settings, err := store.Get(ctx)
+		if err == nil && settings != nil {
+			vm.SiteName = settings.SiteName
+			vm.FooterHTML = template.HTML(settings.FooterHTML)
+			if settings.HasLogo() && storageProvider != nil {
+				vm.LogoURL = storageProvider.URL(settings.LogoPath)
+			}
+		}
+	}
+
+	// Load active announcements if loader is configured
+	if announcementLoader != nil {
+		vm.Announcements = announcementLoader(r.Context())
+	}
+
+	return vm
 }

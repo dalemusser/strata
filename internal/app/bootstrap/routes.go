@@ -2,14 +2,18 @@
 package bootstrap
 
 import (
+	"context"
 	"net/http"
+	"time"
 
+	announcementsfeature "github.com/dalemusser/strata/internal/app/features/announcements"
 	auditlogfeature "github.com/dalemusser/strata/internal/app/features/auditlog"
 	authgooglefeature "github.com/dalemusser/strata/internal/app/features/authgoogle"
 	dashboardfeature "github.com/dalemusser/strata/internal/app/features/dashboard"
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
 	healthfeature "github.com/dalemusser/strata/internal/app/features/health"
 	homefeature "github.com/dalemusser/strata/internal/app/features/home"
+	invitationsfeature "github.com/dalemusser/strata/internal/app/features/invitations"
 	loginfeature "github.com/dalemusser/strata/internal/app/features/login"
 	logoutfeature "github.com/dalemusser/strata/internal/app/features/logout"
 	pagesfeature "github.com/dalemusser/strata/internal/app/features/pages"
@@ -17,6 +21,7 @@ import (
 	settingsfeature "github.com/dalemusser/strata/internal/app/features/settings"
 	systemusersfeature "github.com/dalemusser/strata/internal/app/features/systemusers"
 	appresources "github.com/dalemusser/strata/internal/app/resources"
+	announcementstore "github.com/dalemusser/strata/internal/app/store/announcement"
 	"github.com/dalemusser/strata/internal/app/store/audit"
 	"github.com/dalemusser/strata/internal/app/store/oauthstate"
 	"github.com/dalemusser/strata/internal/app/store/sessions"
@@ -69,8 +74,30 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	}
 	templates.UseEngine(eng, logger)
 
-	// Initialize viewdata with storage for logo URLs.
-	viewdata.Init(deps.FileStorage)
+	// Initialize viewdata with storage and database for settings loading.
+	viewdata.Init(deps.FileStorage, deps.MongoDatabase)
+
+	// Set up announcement loader for viewdata.
+	// This allows BaseVM to include active announcements for banner display.
+	annStore := announcementstore.New(deps.MongoDatabase)
+	viewdata.SetAnnouncementLoader(func(ctx context.Context) []viewdata.AnnouncementVM {
+		announcements, err := annStore.GetActive(ctx)
+		if err != nil {
+			logger.Warn("failed to load active announcements", zap.Error(err))
+			return nil
+		}
+		result := make([]viewdata.AnnouncementVM, len(announcements))
+		for i, ann := range announcements {
+			result[i] = viewdata.AnnouncementVM{
+				ID:          ann.ID.Hex(),
+				Title:       ann.Title,
+				Content:     ann.Content,
+				Type:        string(ann.Type),
+				Dismissible: ann.Dismissible,
+			}
+		}
+		return result
+	})
 
 	// Create error logger for handlers.
 	errLog := errorsfeature.NewErrorLogger(logger)
@@ -125,6 +152,20 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	r.Mount("/privacy", pagesHandler.PrivacyRouter())
 	r.Mount("/pages", pagesfeature.EditRoutes(pagesHandler, sessionMgr))
 
+	// User Invitations (public accept route)
+	invitationsHandler := invitationsfeature.NewHandler(
+		deps.MongoDatabase,
+		sessionMgr,
+		sessionsStore,
+		errLog,
+		deps.Mailer,
+		auditLogger,
+		appCfg.BaseURL,
+		7*24*time.Hour, // 7 days expiry
+		logger,
+	)
+	r.Mount("/invite", invitationsfeature.AcceptRoutes(invitationsHandler))
+
 	// Authentication
 	googleEnabled := appCfg.GoogleClientID != "" && appCfg.GoogleClientSecret != ""
 	loginHandler := loginfeature.NewHandler(
@@ -164,10 +205,10 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	}
 
 	// User profile (any logged-in user)
-	profileHandler := profilefeature.NewHandler(deps.MongoDatabase, errLog, logger)
+	profileHandler := profilefeature.NewHandler(deps.MongoDatabase, sessionsStore, errLog, logger)
 	r.Route("/profile", func(sr chi.Router) {
 		sr.Use(sessionMgr.RequireRole("admin"))
-		sr.Mount("/", profilefeature.Routes(profileHandler))
+		sr.Mount("/", profilefeature.Routes(profileHandler, sessionMgr))
 	})
 
 	// Error pages
@@ -186,6 +227,13 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	// Audit log (admin only)
 	auditLogHandler := auditlogfeature.NewHandler(deps.MongoDatabase, errLog, logger)
 	r.Mount("/audit", auditlogfeature.Routes(auditLogHandler, sessionMgr))
+
+	// User Invitations management (admin only)
+	r.Mount("/invitations", invitationsfeature.AdminRoutes(invitationsHandler, sessionMgr))
+
+	// Announcements management (admin only)
+	announcementsHandler := announcementsfeature.NewHandler(deps.MongoDatabase, errLog, logger)
+	r.Mount("/announcements", announcementsfeature.Routes(announcementsHandler, sessionMgr))
 
 	// Site Settings (admin only)
 	settingsHandler := settingsfeature.NewHandler(deps.MongoDatabase, deps.FileStorage, errLog, logger)
