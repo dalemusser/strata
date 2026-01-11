@@ -29,6 +29,28 @@ A Go web application starter/template project. Fork or copy this to create new a
 - MongoDB running locally or accessible
 - (Optional) Google OAuth credentials for Google login
 
+### Setup
+
+After cloning the repository, run the setup command to download the Tailwind CSS standalone CLI:
+
+```bash
+make setup
+```
+
+This downloads the Tailwind CSS binary for your platform (macOS or Linux). Then build the CSS:
+
+```bash
+make css
+```
+
+For development, run the CSS watcher in a separate terminal:
+
+```bash
+make css-watch
+```
+
+This watches your template files and automatically rebuilds the CSS whenever you add or change Tailwind classes. Without it, you'd need to manually run `make css` after each template change.
+
 ### Configuration
 
 Set environment variables (or use `.env` file):
