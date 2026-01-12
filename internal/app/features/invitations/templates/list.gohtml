@@ -5,7 +5,7 @@
 {{ define "content" }}
 <div class="flex flex-col h-full">
 <div class="mb-4 flex items-center justify-between">
-  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Invitations</h1>
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">✉️ Invitations</h1>
   <a href="/invitations/new" class="px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">
     Send Invitation
   </a>
@@ -25,35 +25,47 @@
   {{ end }}
 
   {{ if .Invitations }}
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="border-b dark:border-gray-700">
-          <th class="text-left py-2 px-2 font-semibold">Email</th>
-          <th class="text-left py-2 px-2 font-semibold">Role</th>
-          <th class="text-left py-2 px-2 font-semibold">Expires</th>
-          <th class="text-right py-2 px-2 font-semibold">Actions</th>
+    <table class="min-w-full text-sm text-left text-gray-700 dark:text-gray-300">
+      <thead class="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 uppercase text-xs">
+        <tr class="border-b border-gray-300 dark:border-gray-600">
+          <th class="px-2 py-2">Email</th>
+          <th class="px-2 py-2">Role</th>
+          <th class="px-2 py-2">Status</th>
+          <th class="px-2 py-2 text-right">Actions</th>
         </tr>
       </thead>
       <tbody>
         {{ range .Invitations }}
-        <tr class="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-          <td class="py-2 px-2">{{ .Email }}</td>
-          <td class="py-2 px-2 capitalize">{{ .Role }}</td>
-          <td class="py-2 px-2">
+        <tr class="border-b border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-900/50">
+          <td class="px-2 py-2 align-middle">{{ .Email }}</td>
+          <td class="px-2 py-2 align-middle">
+            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-400 capitalize">
+              {{ .Role }}
+            </span>
+          </td>
+          <td class="px-2 py-2 align-middle">
             {{ if .Expired }}
-              <span class="text-red-600 dark:text-red-400">Expired</span>
+              <span class="px-2 py-1 text-xs bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 rounded">Expired</span>
             {{ else }}
-              {{ .ExpiresAt.Format "Jan 2, 2006 3:04 PM" }}
+              <span class="px-2 py-1 text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 rounded">Pending</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400 ml-1">{{ .ExpiresAt.Format "Jan 2, 2006" }}</span>
             {{ end }}
           </td>
-          <td class="py-2 px-2 text-right">
-            <form method="POST" action="/invitations/{{ .ID }}/resend" class="inline">
-              <button type="submit" class="text-indigo-600 dark:text-indigo-400 hover:underline mr-2"
-                      onclick="return confirm('Resend invitation to {{ .Email }}?');">Resend</button>
-            </form>
-            <form method="POST" action="/invitations/{{ .ID }}/revoke" class="inline">
-              <button type="submit" class="text-red-600 dark:text-red-400 hover:underline"
-                      onclick="return confirm('Revoke invitation for {{ .Email }}?');">Revoke</button>
+          <td class="px-2 py-2 align-middle text-right">
+            <form
+              method="get"
+              action="/invitations/{{ .ID }}/manage_modal"
+              hx-get="/invitations/{{ .ID }}/manage_modal?return={{ $.CurrentPath | urlquery }}"
+              hx-target="#modal-root"
+              hx-swap="innerHTML"
+            >
+              <button
+                type="submit"
+                class="bg-indigo-600 text-white px-2 py-1 rounded text-xs hover:bg-indigo-700"
+                title="Manage invitation"
+              >
+                Manage
+              </button>
             </form>
           </td>
         </tr>
@@ -66,5 +78,58 @@
     </p>
   {{ end }}
 </div>
+</div>
+<div id="modal-root"></div>
+{{ end }}
+
+{{ define "invitations/manage_modal" }}
+<div class="fixed inset-0 z-50 flex items-center justify-center">
+  <div class="absolute inset-0 bg-black/40"
+       onclick="document.getElementById('modal-root').innerHTML=''"></div>
+
+  <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow border border-gray-300 dark:border-gray-600 max-w-md w-full p-4 space-y-4">
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Manage Invitation</h2>
+
+    <p class="text-sm text-gray-700 dark:text-gray-300">
+      {{ .Email }}<br/>
+      <span class="text-gray-500 dark:text-gray-400 capitalize">{{ .Role }} · {{ if .Expired }}Expired{{ else }}Pending{{ end }}</span>
+    </p>
+
+    <div class="flex flex-col gap-3 pt-2">
+      <div class="flex justify-center gap-2">
+        <!-- Resend -->
+        <form method="POST" action="/invitations/{{ .ID }}/resend"
+              onsubmit="return confirm('Resend invitation to {{ .Email }}?');">
+          <button
+            type="submit"
+            class="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700"
+          >
+            Resend
+          </button>
+        </form>
+
+        <!-- Revoke -->
+        <form method="POST" action="/invitations/{{ .ID }}/revoke"
+              onsubmit="return confirm('Revoke invitation for {{ .Email }}?');">
+          <button
+            type="submit"
+            class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+          >
+            Revoke
+          </button>
+        </form>
+      </div>
+
+      <div class="flex justify-start">
+        <button
+          type="button"
+          class="px-3 py-1 border rounded text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+          onclick="document.getElementById('modal-root').innerHTML=''"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
 </div>
 {{ end }}

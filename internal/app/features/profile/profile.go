@@ -58,6 +58,9 @@ type ProfileVM struct {
 	// Preferences
 	ThemePreference string // "light", "dark", "system"
 
+	// Active sessions
+	Sessions []sessionRow
+
 	// Form state
 	Success template.HTML
 	Error   template.HTML
@@ -71,8 +74,10 @@ func Routes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 	r.Post("/password", h.handleChangePassword)
 	r.Post("/preferences", h.handleUpdatePreferences)
 
-	// Session management
-	r.Get("/sessions", h.showSessions)
+	// Session management (sessions are now embedded in profile page)
+	r.Get("/sessions", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/profile", http.StatusSeeOther)
+	})
 	r.Post("/sessions/{id}/revoke", h.revokeSession)
 	r.Post("/sessions/revoke-all", h.revokeAllSessions(sessionMgr))
 
@@ -99,7 +104,29 @@ func (h *Handler) showProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Load active sessions
+	sessionsList, err := h.sessionsStore.ListByUser(r.Context(), sessionUser.UserID())
+	if err != nil {
+		h.errLog.Log(r, "failed to list sessions", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	currentToken := sessionUser.SessionToken()
+	sessionRows := make([]sessionRow, 0, len(sessionsList))
+	for _, s := range sessionsList {
+		sessionRows = append(sessionRows, sessionRow{
+			ID:           s.ID.Hex(),
+			IPAddress:    s.IPAddress,
+			UserAgent:    s.UserAgent,
+			Device:       parseDevice(s.UserAgent),
+			LastActivity: s.LastActivity,
+			IsCurrent:    s.Token == currentToken,
+		})
+	}
+
 	vm := buildProfileVM(r, user)
+	vm.Sessions = sessionRows
 
 	// Check for success message in query params
 	switch r.URL.Query().Get("success") {
@@ -107,6 +134,18 @@ func (h *Handler) showProfile(w http.ResponseWriter, r *http.Request) {
 		vm.Success = "Password changed successfully."
 	case "preferences":
 		vm.Success = "Preferences saved."
+	case "revoked":
+		vm.Success = "Session revoked successfully."
+	case "revoked_all":
+		vm.Success = "All other sessions have been logged out."
+	}
+
+	// Check for error message in query params
+	switch r.URL.Query().Get("error") {
+	case "use_logout":
+		vm.Error = "Use the logout option to end your current session."
+	case "failed":
+		vm.Error = "Failed to revoke session. Please try again."
 	}
 
 	templates.Render(w, r, "profile/show", vm)
@@ -285,59 +324,6 @@ type sessionRow struct {
 	IsCurrent    bool
 }
 
-// SessionsVM is the view model for the sessions page.
-type SessionsVM struct {
-	viewdata.BaseVM
-	Sessions []sessionRow
-	Success  string
-	Error    string
-}
-
-// showSessions displays the user's active sessions.
-func (h *Handler) showSessions(w http.ResponseWriter, r *http.Request) {
-	sessionUser, ok := auth.CurrentUser(r)
-	if !ok {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-
-	sessionsList, err := h.sessionsStore.ListByUser(r.Context(), sessionUser.UserID())
-	if err != nil {
-		h.errLog.Log(r, "failed to list sessions", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	currentToken := sessionUser.SessionToken()
-	rows := make([]sessionRow, 0, len(sessionsList))
-	for _, s := range sessionsList {
-		rows = append(rows, sessionRow{
-			ID:           s.ID.Hex(),
-			IPAddress:    s.IPAddress,
-			UserAgent:    s.UserAgent,
-			Device:       parseDevice(s.UserAgent),
-			LastActivity: s.LastActivity,
-			IsCurrent:    s.Token == currentToken,
-		})
-	}
-
-	vm := SessionsVM{
-		BaseVM:   viewdata.New(r),
-		Sessions: rows,
-	}
-	vm.Title = "Active Sessions"
-	vm.BackURL = "/profile"
-
-	if r.URL.Query().Get("revoked") == "1" {
-		vm.Success = "Session revoked successfully"
-	}
-	if r.URL.Query().Get("revoked_all") == "1" {
-		vm.Success = "All other sessions have been logged out"
-	}
-
-	templates.Render(w, r, "profile/sessions", vm)
-}
-
 // revokeSession revokes a specific session.
 func (h *Handler) revokeSession(w http.ResponseWriter, r *http.Request) {
 	sessionUser, ok := auth.CurrentUser(r)
@@ -368,17 +354,17 @@ func (h *Handler) revokeSession(w http.ResponseWriter, r *http.Request) {
 
 	// Don't allow revoking the current session via this endpoint
 	if session.Token == sessionUser.SessionToken() {
-		http.Redirect(w, r, "/profile/sessions?error=use_logout", http.StatusSeeOther)
+		http.Redirect(w, r, "/profile?error=use_logout", http.StatusSeeOther)
 		return
 	}
 
 	if err := h.sessionsStore.DeleteByID(r.Context(), objID); err != nil {
 		h.errLog.Log(r, "failed to revoke session", err)
-		http.Redirect(w, r, "/profile/sessions?error=failed", http.StatusSeeOther)
+		http.Redirect(w, r, "/profile?error=failed", http.StatusSeeOther)
 		return
 	}
 
-	http.Redirect(w, r, "/profile/sessions?revoked=1", http.StatusSeeOther)
+	http.Redirect(w, r, "/profile?success=revoked", http.StatusSeeOther)
 }
 
 // revokeAllSessions returns a handler that revokes all sessions except the current one.
@@ -393,11 +379,11 @@ func (h *Handler) revokeAllSessions(sessionMgr *auth.SessionManager) http.Handle
 		currentToken := sessionUser.SessionToken()
 		if err := h.sessionsStore.DeleteByUserExcept(r.Context(), sessionUser.UserID(), currentToken); err != nil {
 			h.errLog.Log(r, "failed to revoke all sessions", err)
-			http.Redirect(w, r, "/profile/sessions?error=failed", http.StatusSeeOther)
+			http.Redirect(w, r, "/profile?error=failed", http.StatusSeeOther)
 			return
 		}
 
-		http.Redirect(w, r, "/profile/sessions?revoked_all=1", http.StatusSeeOther)
+		http.Redirect(w, r, "/profile?success=revoked_all", http.StatusSeeOther)
 	}
 }
 

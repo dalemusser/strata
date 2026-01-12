@@ -127,20 +127,62 @@
     </form>
   </div>
 
-  <!-- Security Section -->
+  <!-- Security Section - Active Sessions -->
   <div class="bg-white dark:bg-gray-800 p-4 rounded border dark:border-gray-700">
-    <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Security</h2>
-    <div class="space-y-2">
-      <div class="flex items-center justify-between">
-        <div>
-          <div class="text-sm text-gray-900 dark:text-gray-100">Active Sessions</div>
-          <div class="text-xs text-gray-500 dark:text-gray-400">View and manage your logged-in devices</div>
-        </div>
-        <a href="/profile/sessions" class="text-indigo-600 dark:text-indigo-400 hover:underline text-sm">
-          Manage →
-        </a>
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Active Sessions</h2>
+    <p class="mb-4 text-sm text-gray-600 dark:text-gray-400">
+      These are the devices currently logged into your account. You can revoke access for any session.
+    </p>
+
+    {{ if .Sessions }}
+      <div class="space-y-3">
+        {{ range .Sessions }}
+          <div class="border dark:border-gray-700 rounded p-3 {{ if .IsCurrent }}bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800{{ end }}">
+            <div class="flex justify-between items-start">
+              <div>
+                <div class="font-semibold text-sm flex items-center gap-2 text-gray-900 dark:text-gray-100">
+                  {{ .Device }}
+                  {{ if .IsCurrent }}
+                    <span class="text-xs bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded">Current Session</span>
+                  {{ end }}
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {{ if .IPAddress }}IP: {{ .IPAddress }}{{ end }}
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Last active: {{ .LastActivity.Format "Jan 2, 2006 at 3:04 PM" }}
+                </div>
+              </div>
+              {{ if not .IsCurrent }}
+                <form method="POST" action="/profile/sessions/{{ .ID }}/revoke">
+                  <button type="submit"
+                          class="text-sm text-red-600 dark:text-red-400 hover:underline"
+                          onclick="return confirm('Revoke this session? The device will be logged out.');">
+                    Revoke
+                  </button>
+                </form>
+              {{ end }}
+            </div>
+          </div>
+        {{ end }}
       </div>
-    </div>
+
+      {{ if gt (len $.Sessions) 1 }}
+        <div class="mt-4 pt-4 border-t dark:border-gray-700">
+          <form method="POST" action="/profile/sessions/revoke-all">
+            <button type="submit"
+                    class="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+                    onclick="return confirm('Log out all other sessions? You will remain logged in on this device.');">
+              Log Out All Other Sessions
+            </button>
+          </form>
+        </div>
+      {{ end }}
+    {{ else }}
+      <p class="text-gray-500 dark:text-gray-400 py-4 text-center">
+        No active sessions found.
+      </p>
+    {{ end }}
   </div>
 
 </div>

@@ -3,11 +3,14 @@
 {{ end }}
 
 {{ define "content" }}
-<div class="flex items-center justify-between mb-2">
+<div class="flex flex-col h-full">
+<div class="mb-4 flex items-center justify-between">
   <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">👥 System Users</h1>
+  <a href="/system-users/new?return={{ .CurrentPath | urlquery }}"
+     class="px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">Add User</a>
 </div>
 
-<section class="flex-1 min-w-0">
+<section class="flex-1 min-w-0 flex flex-col">
   <!-- Controls -->
   <form
     hx-get="/system-users"
@@ -37,11 +40,8 @@
       hx-target="#content"
       hx-swap="innerHTML"
       hx-push-url="true"
-      class="px-4 py-2 border rounded text-sm hover:bg-gray-50 dark:hover:bg-gray-700 mr-6"
+      class="px-4 py-2 border rounded text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
     >Clear</a>
-
-    <a href="/system-users/new?return={{ .CurrentPath | urlquery }}"
-       class="px-4 py-2 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700">Add User</a>
   </form>
 
   <!-- Top pager -->
@@ -69,7 +69,7 @@
     </div>
   </div>
 
-  <div class="bg-white dark:bg-gray-800 rounded shadow overflow-auto" style="max-height: calc(100vh - 12rem); min-height: 10rem;">
+  <div class="p-4 bg-white dark:bg-gray-800 rounded shadow flex-1 mb-2 overflow-auto">
     <table class="min-w-full text-sm text-left text-gray-700 dark:text-gray-300">
       <colgroup>
         <col style="width: 25%;" />
@@ -79,8 +79,8 @@
         <col style="width: 8rem;" />
         <col style="width: 10rem;" />
       </colgroup>
-      <thead class="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 uppercase text-xs sticky top-0 z-10">
-        <tr>
+      <thead class="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 uppercase text-xs">
+        <tr class="border-b border-gray-300 dark:border-gray-600">
           <th class="px-2 py-2">Full Name</th>
           <th class="px-2 py-2">Login ID</th>
           <th class="px-2 py-2">Role</th>
@@ -89,9 +89,9 @@
           <th class="px-2 py-2 text-right">Actions</th>
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+      <tbody>
         {{ range .Rows }}
-        <tr>
+        <tr class="border-b border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-900/50">
           <td class="px-2 py-2 align-middle"><div class="truncate" title="{{ .FullName }}">{{ .FullName }}</div></td>
           <td class="px-2 py-2 align-middle"><div class="truncate" title="{{ .LoginID }}">{{ .LoginID }}</div></td>
           <td class="px-2 py-2 align-middle">
@@ -114,24 +114,22 @@
             {{ end }}
           </td>
           <td class="px-2 py-2 align-middle text-right">
-            <div class="inline-flex gap-2 whitespace-nowrap">
-              <form
-                method="get"
-                action="/system-users/{{ .ID.Hex }}/manage_modal"
-                hx-get="/system-users/{{ .ID.Hex }}/manage_modal?return={{ $.CurrentPath | urlquery }}"
-                hx-target="#modal-root"
-                hx-swap="innerHTML"
-                aria-label="Manage system user"
+            <form
+              method="get"
+              action="/system-users/{{ .ID.Hex }}/manage_modal"
+              hx-get="/system-users/{{ .ID.Hex }}/manage_modal?return={{ $.CurrentPath | urlquery }}"
+              hx-target="#modal-root"
+              hx-swap="innerHTML"
+              aria-label="Manage system user"
+            >
+              <button
+                type="submit"
+                class="bg-indigo-600 text-white px-2 py-1 rounded text-xs hover:bg-indigo-700"
+                title="Manage {{ .FullName }}"
               >
-                <button
-                  type="submit"
-                  class="bg-indigo-600 text-white px-2 py-1 rounded text-xs md:text-sm hover:bg-indigo-700"
-                  title="Manage {{ .FullName }}"
-                >
-                  Manage
-                </button>
-              </form>
-            </div>
+                Manage
+              </button>
+            </form>
           </td>
         </tr>
         {{ else }}
@@ -141,9 +139,9 @@
         {{ end }}
       </tbody>
     </table>
-    <div class="w-full border-t border-gray-300 dark:border-gray-600"></div>
   </div>
 </section>
+</div>
 <div id="modal-root"></div>
 {{ end }}
 

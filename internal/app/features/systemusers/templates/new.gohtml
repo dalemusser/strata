@@ -3,22 +3,24 @@
 {{ end }}
 
 {{ define "content" }}
-<div class="flex items-center mb-2">
+<div class="flex flex-col h-full">
+<div class="mb-4 flex items-center">
   <a href="{{ .BackURL }}"
-     class="text-sm px-3 py-1 border dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 mr-2"
+     class="text-sm px-3 py-1 border dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 mr-2 no-loader"
      title="Go back">
     ← Back
   </a>
   <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">👤 Add System User</h1>
 </div>
 
-{{ if .Error }}
-  <div class="mb-3 p-2 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded max-w-xl">
-    {{ .Error }}
-  </div>
-{{ end }}
+<div class="p-4 bg-white dark:bg-gray-800 rounded shadow text-gray-700 dark:text-gray-300 text-sm flex-1 mb-2">
+  {{ if .Error }}
+    <div class="mb-4 p-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded max-w-xl">
+      {{ .Error }}
+    </div>
+  {{ end }}
 
-<form method="post" action="/system-users/new" class="space-y-3 max-w-xl bg-white dark:bg-gray-800 p-4 rounded shadow border dark:border-gray-700">
+  <form method="post" action="/system-users/new" class="space-y-3 max-w-xl">
   <input type="hidden" name="return" value="{{ .BackURL }}">
 
   <div>
@@ -69,7 +71,9 @@
     <button type="submit" class="bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 text-sm">Add System User</button>
     <a href="{{ .BackURL }}" class="px-3 py-1 border dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">Cancel</a>
   </div>
-</form>
+  </form>
+</div>
+</div>
 
 <script>
 (function() {

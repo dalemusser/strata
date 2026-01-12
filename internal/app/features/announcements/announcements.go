@@ -65,6 +65,7 @@ func Routes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 	r.Get("/", h.list)
 	r.Get("/new", h.showNew)
 	r.Post("/new", h.create)
+	r.Get("/{id}/manage_modal", h.manageModal)
 	r.Get("/{id}/edit", h.showEdit)
 	r.Post("/{id}", h.update)
 	r.Post("/{id}/toggle", h.toggle)
@@ -230,6 +231,46 @@ type EditVM struct {
 	StartsAt    string
 	EndsAt      string
 	Error       string
+}
+
+// ManageModalVM is the view model for the manage modal.
+type ManageModalVM struct {
+	ID      string
+	Title   string
+	Type    string
+	Active  bool
+	BackURL string
+}
+
+// manageModal displays the manage modal for an announcement.
+func (h *Handler) manageModal(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	ann, err := h.announcementStore.GetByID(r.Context(), objID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	backURL := r.URL.Query().Get("return")
+	if backURL == "" {
+		backURL = "/announcements"
+	}
+
+	vm := ManageModalVM{
+		ID:      id,
+		Title:   ann.Title,
+		Type:    string(ann.Type),
+		Active:  ann.Active,
+		BackURL: backURL,
+	}
+
+	templates.Render(w, r, "announcements/manage_modal", vm)
 }
 
 // showEdit displays the edit announcement form.

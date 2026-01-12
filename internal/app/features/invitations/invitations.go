@@ -93,6 +93,7 @@ func AdminRoutes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 	r.Get("/", h.list)
 	r.Get("/new", h.showNew)
 	r.Post("/new", h.create)
+	r.Get("/{id}/manage_modal", h.manageModal)
 	r.Post("/{id}/revoke", h.revoke)
 	r.Post("/{id}/resend", h.resend)
 
@@ -158,6 +159,46 @@ type NewVM struct {
 	Email string
 	Role  string
 	Error string
+}
+
+// ManageModalVM is the view model for the manage modal.
+type ManageModalVM struct {
+	ID      string
+	Email   string
+	Role    string
+	Expired bool
+	BackURL string
+}
+
+// manageModal displays the manage modal for an invitation.
+func (h *Handler) manageModal(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	inv, err := h.invitationStore.GetByID(r.Context(), objID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	backURL := r.URL.Query().Get("return")
+	if backURL == "" {
+		backURL = "/invitations"
+	}
+
+	vm := ManageModalVM{
+		ID:      id,
+		Email:   inv.Email,
+		Role:    inv.Role,
+		Expired: inv.ExpiresAt.Before(time.Now()),
+		BackURL: backURL,
+	}
+
+	templates.Render(w, r, "invitations/manage_modal", vm)
 }
 
 // showNew displays the new invitation form.

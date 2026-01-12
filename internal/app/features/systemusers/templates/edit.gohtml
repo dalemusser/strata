@@ -3,28 +3,30 @@
 {{ end }}
 
 {{ define "content" }}
-<div class="flex items-center mb-2">
+<div class="flex flex-col h-full">
+<div class="mb-4 flex items-center">
   <a href="{{ .BackURL }}"
-     class="text-sm px-3 py-1 border dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 mr-2"
+     class="text-sm px-3 py-1 border dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 mr-2 no-loader"
      title="Go back">
     ← Back
   </a>
   <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">✏️ Edit System User</h1>
 </div>
 
-{{ if .Error }}
-  <div class="mb-3 p-2 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded max-w-xl">
-    {{ .Error }}
-  </div>
-{{ end }}
+<div class="p-4 bg-white dark:bg-gray-800 rounded shadow text-gray-700 dark:text-gray-300 text-sm flex-1 mb-2">
+  {{ if .Error }}
+    <div class="mb-4 p-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded max-w-xl">
+      {{ .Error }}
+    </div>
+  {{ end }}
 
-{{ if .Success }}
-  <div class="mb-3 p-2 border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/40 text-green-700 dark:text-green-300 rounded max-w-xl">
-    {{ .Success }}
-  </div>
-{{ end }}
+  {{ if .Success }}
+    <div class="mb-4 p-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded max-w-xl">
+      {{ .Success }}
+    </div>
+  {{ end }}
 
-<form method="post" action="/system-users/{{ .ID }}" class="space-y-3 max-w-xl bg-white dark:bg-gray-800 p-4 rounded shadow border dark:border-gray-700">
+  <form method="post" action="/system-users/{{ .ID }}" class="space-y-3 max-w-xl">
   <input type="hidden" name="return" value="{{ .BackURL }}">
 
   <div>
@@ -89,24 +91,29 @@
     <button type="submit" class="bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 text-sm">Update System User</button>
     <a href="{{ .BackURL }}" class="px-3 py-1 border dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">Cancel</a>
   </div>
-</form>
-
-{{ if not .IsSelf }}
-<!-- Danger zone: Delete System User -->
-<div class="max-w-xl mt-4 p-4 border border-red-300 dark:border-red-700 rounded bg-red-50 dark:bg-red-900/20">
-  <h3 class="text-sm font-medium text-red-800 dark:text-red-300 mb-2">Danger Zone</h3>
-  <form method="post" action="/system-users/{{ .ID }}/delete">
-    <input type="hidden" name="return" value="/system-users">
-    <button
-      type="submit"
-      class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
-      onclick="return confirm('Delete this system user? This action cannot be undone.');"
-    >
-      Delete System User
-    </button>
   </form>
+
+  {{ if not .IsSelf }}
+  <!-- Danger Zone -->
+  <div class="max-w-xl mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+  <div class="p-4 border border-red-300 dark:border-red-700 rounded bg-red-50 dark:bg-red-900/20">
+    <h3 class="text-sm font-semibold text-red-800 dark:text-red-300 mb-2">Danger Zone</h3>
+    <p class="text-xs text-red-700 dark:text-red-400 mb-3">Permanently delete this system user. This action cannot be undone.</p>
+    <form method="post" action="/system-users/{{ .ID }}/delete">
+      <input type="hidden" name="return" value="/system-users">
+      <button
+        type="submit"
+        class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
+        onclick="return confirm('Delete this system user? This action cannot be undone.');"
+      >
+        Delete System User
+      </button>
+    </form>
+  </div>
+  </div>
+  {{ end }}
 </div>
-{{ end }}
+</div>
 
 <script>
 (function() {
