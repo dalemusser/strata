@@ -248,17 +248,15 @@ func IsValidEmail(email string) bool {
 	return addr.Address == email
 }
 
-// AllowedAuthMethodsList returns the enabled auth methods as a slice.
+// AllowedAuthMethodsList returns all valid auth methods as a slice.
 // Useful for displaying in error messages.
-// This uses models.EnabledAuthMethods as the single source of truth.
 func AllowedAuthMethodsList() []string {
-	return models.EnabledAuthMethodValues()
+	return models.AllAuthMethodValues()
 }
 
-// IsValidAuthMethod checks if the given method (case-insensitive) is enabled.
-// This uses models.EnabledAuthMethods as the single source of truth.
+// IsValidAuthMethod checks if the given method (case-insensitive) is a valid auth method.
 func IsValidAuthMethod(method string) bool {
-	return models.IsEnabledAuthMethod(strings.ToLower(strings.TrimSpace(method)))
+	return models.IsValidAuthMethod(strings.ToLower(strings.TrimSpace(method)))
 }
 
 // IsValidHTTPURL checks if the given string is a valid http:// or https:// URL.

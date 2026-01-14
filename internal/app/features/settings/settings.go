@@ -4,7 +4,6 @@ package settings
 import (
 	"context"
 	"fmt"
-	"html/template"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
 	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
+	"github.com/dalemusser/strata/internal/app/system/htmlsanitize"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/pantry/storage"
@@ -102,7 +102,7 @@ func (h *Handler) show(w http.ResponseWriter, r *http.Request) {
 	}
 	vm.Title = "Site Settings"
 	vm.SiteName = settings.SiteName
-	vm.FooterHTML = template.HTML(settings.FooterHTML)
+	vm.FooterHTML = htmlsanitize.SanitizeToHTML(settings.FooterHTML)
 
 	if r.URL.Query().Get("success") == "1" {
 		vm.Success = "Settings updated successfully"
@@ -110,6 +110,12 @@ func (h *Handler) show(w http.ResponseWriter, r *http.Request) {
 
 	templates.Render(w, r, "settings/show", vm)
 }
+
+// MaxContentLength is the maximum allowed length for HTML content fields (100KB).
+const MaxContentLength = 100000
+
+// MaxFooterLength is the maximum allowed length for footer HTML (10KB).
+const MaxFooterLength = 10000
 
 // update saves the settings including logo handling.
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
@@ -123,9 +129,22 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteName := r.FormValue("site_name")
 	landingTitle := r.FormValue("landing_title")
-	landingContent := r.FormValue("landing_content")
-	footerHTML := r.FormValue("footer_html")
+	rawLandingContent := r.FormValue("landing_content")
+	rawFooterHTML := r.FormValue("footer_html")
 	removeLogo := r.FormValue("remove_logo") != ""
+
+	// Validate content lengths
+	if len(rawLandingContent) > MaxContentLength {
+		h.renderSettingsWithError(w, r, "Landing content is too long. Maximum length is 100,000 characters.")
+		return
+	}
+	if len(rawFooterHTML) > MaxFooterLength {
+		h.renderSettingsWithError(w, r, "Footer HTML is too long. Maximum length is 10,000 characters.")
+		return
+	}
+
+	landingContent := htmlsanitize.Sanitize(rawLandingContent)
+	footerHTML := htmlsanitize.Sanitize(rawFooterHTML)
 
 	// Get current settings for logo handling
 	current, _ := h.settingsStore.Get(ctx)
@@ -219,7 +238,7 @@ func (h *Handler) renderSettingsWithError(w http.ResponseWriter, r *http.Request
 	}
 	vm.Title = "Site Settings"
 	vm.SiteName = settings.SiteName
-	vm.FooterHTML = template.HTML(settings.FooterHTML)
+	vm.FooterHTML = htmlsanitize.SanitizeToHTML(settings.FooterHTML)
 
 	templates.Render(w, r, "settings/show", vm)
 }

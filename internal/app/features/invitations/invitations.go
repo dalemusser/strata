@@ -18,6 +18,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
 	"github.com/dalemusser/strata/internal/app/system/mailer"
+	"github.com/dalemusser/strata/internal/app/system/network"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
@@ -516,27 +517,9 @@ func (h *Handler) handleAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user already exists with this email or login_id
-	existingUser, _ := h.userStore.GetByEmail(r.Context(), inv.Email)
-	if existingUser == nil {
-		existingUser, _ = h.userStore.GetByLoginID(r.Context(), inv.Email)
-	}
-	if existingUser != nil {
-		// Mark invitation as used since the account exists
-		h.invitationStore.MarkUsed(r.Context(), inv.ID)
-
-		h.auditLogger.LogAuthEvent(r, &existingUser.ID, "invitation_blocked_account_exists", true, inv.Email)
-
-		vm := AcceptVM{
-			BaseVM: viewdata.New(r),
-			Error:  "An account with this email already exists. Please log in instead.",
-		}
-		vm.Title = "Account Already Exists"
-		templates.Render(w, r, "invitations/accept", vm)
-		return
-	}
-
 	// Create user with email authentication
+	// Using direct create instead of check-then-create to avoid race conditions.
+	// MongoDB's unique index will prevent duplicates atomically.
 	user, err := h.userStore.CreateFromInput(r.Context(), userstore.CreateInput{
 		FullName:   fullName,
 		Email:      inv.Email,
@@ -544,6 +527,22 @@ func (h *Handler) handleAccept(w http.ResponseWriter, r *http.Request) {
 		Role:       inv.Role,
 	})
 	if err != nil {
+		// Handle duplicate user (race-safe check)
+		if err == userstore.ErrDuplicateLoginID {
+			// Mark invitation as used since the account exists
+			h.invitationStore.MarkUsed(r.Context(), inv.ID)
+
+			h.auditLogger.LogAuthEvent(r, nil, "invitation_blocked_account_exists", true, inv.Email)
+
+			vm := AcceptVM{
+				BaseVM: viewdata.New(r),
+				Error:  "An account with this email already exists. Please log in instead.",
+			}
+			vm.Title = "Account Already Exists"
+			templates.Render(w, r, "invitations/accept", vm)
+			return
+		}
+
 		h.errLog.Log(r, "failed to create user", err)
 		vm := AcceptVM{
 			BaseVM:   viewdata.New(r),
@@ -594,7 +593,7 @@ func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, u
 	session := sessions.Session{
 		Token:        token,
 		UserID:       userID,
-		IPAddress:    getClientIP(r),
+		IPAddress:    network.GetClientIP(r),
 		UserAgent:    r.UserAgent(),
 		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
 		LastActivity: now,
@@ -606,27 +605,4 @@ func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, u
 	}
 
 	return nil
-}
-
-// getClientIP extracts the client IP from the request.
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first (for reverse proxies)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the chain
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
-	}
-
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Fall back to RemoteAddr
-	if idx := strings.LastIndex(r.RemoteAddr, ":"); idx != -1 {
-		return r.RemoteAddr[:idx]
-	}
-	return r.RemoteAddr
 }

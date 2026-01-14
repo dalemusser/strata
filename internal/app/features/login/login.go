@@ -18,6 +18,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
 	"github.com/dalemusser/strata/internal/app/system/authutil"
 	"github.com/dalemusser/strata/internal/app/system/mailer"
+	"github.com/dalemusser/strata/internal/app/system/network"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
@@ -762,17 +763,6 @@ func (h *Handler) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	templates.Render(w, r, "login/reset_password", vm)
 }
 
-// getClientIP extracts the client IP from the request.
-func getClientIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return ip
-	}
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	return r.RemoteAddr
-}
-
 // createTrackedSession creates a session in both the cookie and MongoDB for tracking.
 func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
 	// First create the cookie session
@@ -791,7 +781,7 @@ func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, u
 	session := sessions.Session{
 		Token:        token,
 		UserID:       userID,
-		IPAddress:    getClientIP(r),
+		IPAddress:    network.GetClientIP(r),
 		UserAgent:    r.UserAgent(),
 		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
 		LastActivity: now,

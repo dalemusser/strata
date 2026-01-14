@@ -8,6 +8,7 @@ import (
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
 	pagestore "github.com/dalemusser/strata/internal/app/store/pages"
 	"github.com/dalemusser/strata/internal/app/system/auth"
+	"github.com/dalemusser/strata/internal/app/system/htmlsanitize"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/pantry/templates"
@@ -93,7 +94,7 @@ func (h *Handler) showPage(slug, defaultTitle string) http.HandlerFunc {
 
 		if err == nil {
 			vm.Title = page.Title
-			vm.Content = template.HTML(page.Content)
+			vm.Content = htmlsanitize.PrepareForDisplay(page.Content)
 		}
 
 		templates.Render(w, r, "pages/show", vm)
@@ -184,6 +185,9 @@ func (h *Handler) editPage(w http.ResponseWriter, r *http.Request) {
 	templates.Render(w, r, "pages/edit", vm)
 }
 
+// MaxContentLength is the maximum allowed length for page content (100KB).
+const MaxContentLength = 100000
+
 // updatePage saves changes to a page.
 func (h *Handler) updatePage(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
@@ -195,7 +199,23 @@ func (h *Handler) updatePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	title := r.FormValue("title")
-	content := r.FormValue("content")
+	rawContent := r.FormValue("content")
+
+	// Validate content length before processing
+	if len(rawContent) > MaxContentLength {
+		vm := EditPageVM{
+			BaseVM:    viewdata.New(r),
+			Slug:      slug,
+			PageTitle: title,
+			Content:   rawContent,
+			Error:     "Content is too long. Maximum length is 100,000 characters.",
+		}
+		vm.Title = "Edit " + pageDisplayName(slug)
+		templates.Render(w, r, "pages/edit", vm)
+		return
+	}
+
+	content := htmlsanitize.Sanitize(rawContent)
 
 	page := models.Page{
 		Slug:    slug,

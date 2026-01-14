@@ -20,15 +20,6 @@ var AllAuthMethods = []AuthMethod{
 	// {Value: "classlink", Label: "Classlink"},
 }
 
-// EnabledAuthMethods contains the auth methods currently available in the UI.
-// Modify this list to control which options appear in Auth Method dropdowns.
-var EnabledAuthMethods = []AuthMethod{
-	{Value: "trust", Label: "Trust"},
-	{Value: "password", Label: "Password"},
-	{Value: "email", Label: "Email Verification"},
-	{Value: "google", Label: "Google"},
-}
-
 // IsValidAuthMethod checks if a value is a valid auth method.
 func IsValidAuthMethod(value string) bool {
 	for _, m := range AllAuthMethods {
@@ -39,20 +30,10 @@ func IsValidAuthMethod(value string) bool {
 	return false
 }
 
-// IsEnabledAuthMethod checks if a value is an enabled auth method.
-func IsEnabledAuthMethod(value string) bool {
-	for _, m := range EnabledAuthMethods {
-		if m.Value == value {
-			return true
-		}
-	}
-	return false
-}
-
-// EnabledAuthMethodValues returns just the values of enabled auth methods.
-func EnabledAuthMethodValues() []string {
-	values := make([]string, len(EnabledAuthMethods))
-	for i, m := range EnabledAuthMethods {
+// AllAuthMethodValues returns all auth method values as a slice.
+func AllAuthMethodValues() []string {
+	values := make([]string, len(AllAuthMethods))
+	for i, m := range AllAuthMethods {
 		values[i] = m.Value
 	}
 	return values
