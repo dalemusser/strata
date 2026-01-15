@@ -21,6 +21,7 @@
   {{ end }}
 
   <form method="POST" action="/announcements/new" class="space-y-4 max-w-lg">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <div>
       <label for="title" class="block font-semibold mb-1">Title</label>
       <input type="text" id="title" name="title" value="{{ .Title }}" required

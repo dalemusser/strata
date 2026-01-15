@@ -262,12 +262,14 @@ func (h *Handler) handleUpdatePreferences(w http.ResponseWriter, r *http.Request
 	}
 
 	// Set theme preference cookie so the new theme applies immediately on redirect
+	// HttpOnly is false to allow client-side JavaScript to read it for immediate theme application
+	// MaxAge is 1 year (the database is the source of truth, this is just for client-side convenience)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "theme_pref",
 		Value:    theme,
 		Path:     "/",
-		MaxAge:   60,
-		HttpOnly: false,
+		MaxAge:   365 * 24 * 60 * 60, // 1 year
+		HttpOnly: false,              // Intentionally false for JS access to prevent theme flashing
 		SameSite: http.SameSiteLaxMode,
 	})
 

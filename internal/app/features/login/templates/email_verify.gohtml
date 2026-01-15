@@ -17,6 +17,7 @@
     {{ end }}
 
     <form method="POST" class="space-y-4 max-w-md">
+        <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
         <input type="hidden" name="email" value="{{ .Email }}">
         <div>
             <label for="code" class="block text-sm font-medium mb-1">Verification Code</label>

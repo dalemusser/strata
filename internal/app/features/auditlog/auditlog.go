@@ -142,21 +142,32 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		totalCount = 0
 	}
 
-	// Build user lookup map
-	userIDs := make(map[primitive.ObjectID]bool)
+	// Build user lookup map - collect unique user IDs first
+	userIDSet := make(map[primitive.ObjectID]bool)
 	for _, e := range events {
 		if e.UserID != nil {
-			userIDs[*e.UserID] = true
+			userIDSet[*e.UserID] = true
 		}
 		if e.ActorID != nil {
-			userIDs[*e.ActorID] = true
+			userIDSet[*e.ActorID] = true
 		}
 	}
 
+	// Convert to slice and fetch all users in a single batch query
+	userIDs := make([]primitive.ObjectID, 0, len(userIDSet))
+	for id := range userIDSet {
+		userIDs = append(userIDs, id)
+	}
+
 	userMap := make(map[primitive.ObjectID]*models.User)
-	for id := range userIDs {
-		if user, err := h.userStore.GetByID(r.Context(), id); err == nil {
-			userMap[id] = user
+	if len(userIDs) > 0 {
+		users, err := h.userStore.GetByIDs(r.Context(), userIDs)
+		if err != nil {
+			h.logger.Warn("failed to fetch users for audit log", zap.Error(err))
+		} else {
+			for i := range users {
+				userMap[users[i].ID] = &users[i]
+			}
 		}
 	}
 

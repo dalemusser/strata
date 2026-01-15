@@ -61,7 +61,8 @@ func IsPlainText(content string) bool {
 	if content == "" {
 		return true
 	}
-	// Simple check: if it contains any HTML-like tags, it's not plain text
+	// Simple check: if it contains both < and >, it's likely HTML
+	// Valid HTML tags require both characters, so if either is missing, treat as plain text
 	return !strings.Contains(content, "<") || !strings.Contains(content, ">")
 }
 

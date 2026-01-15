@@ -244,9 +244,19 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if user already exists with this email or login_id
-	existingUser, _ := h.userStore.GetByEmail(r.Context(), email)
+	existingUser, err := h.userStore.GetByEmail(r.Context(), email)
+	if err != nil && err != mongo.ErrNoDocuments {
+		h.errLog.Log(r, "failed to check existing email", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 	if existingUser == nil {
-		existingUser, _ = h.userStore.GetByLoginID(r.Context(), email)
+		existingUser, err = h.userStore.GetByLoginID(r.Context(), email)
+		if err != nil && err != mongo.ErrNoDocuments {
+			h.errLog.Log(r, "failed to check existing login_id", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
 	}
 	if existingUser != nil {
 		vm := NewVM{
@@ -430,9 +440,19 @@ func (h *Handler) showAccept(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if user already exists with this email or login_id
-	existingUser, _ := h.userStore.GetByEmail(r.Context(), inv.Email)
+	existingUser, err := h.userStore.GetByEmail(r.Context(), inv.Email)
+	if err != nil && err != mongo.ErrNoDocuments {
+		h.errLog.Log(r, "failed to check existing email", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 	if existingUser == nil {
-		existingUser, _ = h.userStore.GetByLoginID(r.Context(), inv.Email)
+		existingUser, err = h.userStore.GetByLoginID(r.Context(), inv.Email)
+		if err != nil && err != mongo.ErrNoDocuments {
+			h.errLog.Log(r, "failed to check existing login_id", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Handle case where someone is already logged in

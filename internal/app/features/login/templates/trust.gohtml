@@ -17,6 +17,7 @@
     {{ end }}
 
     <form method="POST" class="space-y-4 max-w-md">
+        <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
         <div>
             <label for="login_id" class="block text-sm font-medium mb-1">Login ID</label>
             <input type="text" id="login_id" name="login_id" value="{{ .LoginID }}" required

@@ -34,6 +34,8 @@ import (
 	"github.com/dalemusser/waffle/pantry/fileserver"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/gorilla/csrf"
 	"go.uber.org/zap"
 )
 
@@ -115,6 +117,10 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 
 	r := chi.NewRouter()
 
+	// Request timeout middleware: prevents requests from hanging indefinitely.
+	// Requests exceeding 30 seconds will be cancelled and return a 503 Service Unavailable.
+	r.Use(chimw.Timeout(30 * time.Second))
+
 	// CORS middleware: must be early in the chain to handle preflight requests.
 	// Only active when enable_cors=true in config.
 	r.Use(middleware.CORSFromConfig(coreCfg))
@@ -122,6 +128,31 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	// Global auth middleware: loads SessionUser into context if logged in.
 	// This makes the current user available to all handlers via auth.CurrentUser(r).
 	r.Use(sessionMgr.LoadSessionUser)
+
+	// CSRF protection middleware: protects POST/PUT/DELETE requests from cross-site request forgery.
+	// The CSRF token must be included in forms as a hidden field or in the X-CSRF-Token header.
+	csrfMiddleware := csrf.Protect(
+		[]byte(appCfg.CSRFKey),
+		csrf.Secure(secure),
+		csrf.Path("/"),
+		csrf.CookieName("csrf_token"),
+		csrf.FieldName("csrf_token"),
+		csrf.SameSite(csrf.SameSiteLaxMode),
+		csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			logger.Warn("CSRF validation failed",
+				zap.String("path", r.URL.Path),
+				zap.String("method", r.Method),
+				zap.String("reason", csrf.FailureReason(r).Error()),
+			)
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("HX-Redirect", "/login")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			http.Error(w, "CSRF token invalid or missing", http.StatusForbidden)
+		})),
+	)
+	r.Use(csrfMiddleware)
 
 	// Health check endpoint for load balancers and orchestrators
 	healthHandler := healthfeature.NewHandler(deps.MongoClient, logger)
@@ -168,6 +199,8 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 
 	// Authentication
 	googleEnabled := appCfg.GoogleClientID != "" && appCfg.GoogleClientSecret != ""
+	// Trust login is only enabled in dev mode for security - it allows passwordless login
+	trustLoginEnabled := coreCfg.Env == "dev"
 	loginHandler := loginfeature.NewHandler(
 		deps.MongoDatabase,
 		sessionMgr,
@@ -178,6 +211,7 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 		appCfg.BaseURL,
 		appCfg.EmailVerifyExpiry,
 		googleEnabled,
+		trustLoginEnabled,
 		logger,
 	)
 	r.Mount("/login", loginfeature.Routes(loginHandler))

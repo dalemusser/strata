@@ -7,6 +7,7 @@ import (
 
 	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
 	"github.com/dalemusser/strata/internal/app/system/auth"
+	"github.com/dalemusser/strata/internal/app/system/htmlsanitize"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/pantry/templates"
@@ -62,7 +63,7 @@ func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Warn("failed to load settings for landing page", zap.Error(err))
 		vm.LandingTitle = models.DefaultLandingTitle
-		vm.Content = template.HTML(models.DefaultLandingContent)
+		vm.Content = htmlsanitize.SanitizeToHTML(models.DefaultLandingContent)
 	} else {
 		// Settings store returns defaults if no document exists
 		vm.LandingTitle = settings.LandingTitle
@@ -70,9 +71,9 @@ func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 			vm.LandingTitle = models.DefaultLandingTitle
 		}
 		if settings.LandingContent == "" {
-			vm.Content = template.HTML(models.DefaultLandingContent)
+			vm.Content = htmlsanitize.SanitizeToHTML(models.DefaultLandingContent)
 		} else {
-			vm.Content = template.HTML(settings.LandingContent)
+			vm.Content = htmlsanitize.SanitizeToHTML(settings.LandingContent)
 		}
 	}
 

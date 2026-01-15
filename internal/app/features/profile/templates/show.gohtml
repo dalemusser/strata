@@ -46,6 +46,7 @@
     </div>
 
     <form method="POST" action="/profile/password" class="space-y-3">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
       <div>
         <label for="current_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Current Password</label>
         <input
@@ -94,6 +95,7 @@
     <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Preferences</h2>
 
     <form method="POST" action="/profile/preferences" class="space-y-3">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
       <div>
         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Theme</label>
         <div class="space-y-2">
@@ -155,6 +157,7 @@
               </div>
               {{ if not .IsCurrent }}
                 <form method="POST" action="/profile/sessions/{{ .ID }}/revoke">
+                  <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
                   <button type="submit"
                           class="px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
                           onclick="return confirm('Revoke this session? The device will be logged out.');">
@@ -170,6 +173,7 @@
       {{ if gt (len $.Sessions) 1 }}
         <div class="mt-4 pt-4 border-t dark:border-gray-700">
           <form method="POST" action="/profile/sessions/revoke-all">
+            <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
             <button type="submit"
                     class="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700"
                     onclick="return confirm('Log out all other sessions? You will remain logged in on this device.');">

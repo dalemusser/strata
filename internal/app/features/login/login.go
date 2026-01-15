@@ -18,6 +18,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
 	"github.com/dalemusser/strata/internal/app/system/authutil"
 	"github.com/dalemusser/strata/internal/app/system/mailer"
+	"github.com/dalemusser/strata/internal/app/system/navigation"
 	"github.com/dalemusser/strata/internal/app/system/network"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/waffle/pantry/templates"
@@ -26,6 +27,12 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
+
+// loginBackURLOptions provides safe redirect URL options for login.
+// Allows any URL that starts with "/" (relative URLs only) and falls back to dashboard.
+var loginBackURLOptions = navigation.BackURLOptions{
+	Fallback: "/dashboard",
+}
 
 // Handler provides login handlers.
 type Handler struct {
@@ -40,10 +47,12 @@ type Handler struct {
 	baseURL            string
 	emailVerifyExpiry  time.Duration
 	googleEnabled      bool
+	trustLoginEnabled  bool // Only enable in dev mode for security
 	logger             *zap.Logger
 }
 
 // NewHandler creates a new login Handler.
+// Set trustLoginEnabled to true only in development mode.
 func NewHandler(
 	db *mongo.Database,
 	sessionMgr *auth.SessionManager,
@@ -54,6 +63,7 @@ func NewHandler(
 	baseURL string,
 	emailVerifyExpiry time.Duration,
 	googleEnabled bool,
+	trustLoginEnabled bool,
 	logger *zap.Logger,
 ) *Handler {
 	// Use same expiry for password reset as email verification (default 10 minutes)
@@ -74,6 +84,7 @@ func NewHandler(
 		baseURL:            baseURL,
 		emailVerifyExpiry:  emailVerifyExpiry,
 		googleEnabled:      googleEnabled,
+		trustLoginEnabled:  trustLoginEnabled,
 		logger:             logger,
 	}
 }
@@ -94,9 +105,12 @@ func Routes(h *Handler) http.Handler {
 	r.Get("/", h.showLogin)
 	r.Post("/", h.handleLogin)
 
-	// Trust auth (development)
-	r.Get("/trust", h.showTrustLogin)
-	r.Post("/trust", h.handleTrustLogin)
+	// Trust auth - only enable in development mode for security
+	// In production, these routes should not be accessible
+	if h.trustLoginEnabled {
+		r.Get("/trust", h.showTrustLogin)
+		r.Post("/trust", h.handleTrustLogin)
+	}
 
 	// Password auth
 	r.Get("/password", h.showPasswordLogin)
@@ -120,10 +134,18 @@ func Routes(h *Handler) http.Handler {
 
 // showLogin displays the login page with login_id field.
 func (h *Handler) showLogin(w http.ResponseWriter, r *http.Request) {
+	// Use SafeBackURL to prevent open redirect attacks
+	safeReturnURL := navigation.SafeBackURL(r, loginBackURLOptions)
+	// Only include return URL if it's not the default fallback
+	returnURL := ""
+	if safeReturnURL != loginBackURLOptions.Fallback {
+		returnURL = safeReturnURL
+	}
+
 	vm := LoginVM{
 		BaseVM:        viewdata.New(r),
 		GoogleEnabled: h.googleEnabled,
-		ReturnURL:     r.URL.Query().Get("return"),
+		ReturnURL:     returnURL,
 		Error:         r.URL.Query().Get("error"),
 	}
 	vm.Title = "Login"
@@ -140,7 +162,13 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	loginID := r.FormValue("login_id")
-	returnURL := r.FormValue("return")
+	// Use SafeBackURL to prevent open redirect attacks
+	safeRedirectURL := navigation.SafeBackURL(r, loginBackURLOptions)
+	// For passing to VM, only include if it's not the default
+	returnURL := ""
+	if safeRedirectURL != loginBackURLOptions.Fallback {
+		returnURL = safeRedirectURL
+	}
 
 	if loginID == "" {
 		vm := LoginVM{
@@ -200,11 +228,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.auditLogger.LogAuthEvent(r, &user.ID, "login_success", true, "")
-		if returnURL != "" {
-			http.Redirect(w, r, returnURL, http.StatusSeeOther)
-		} else {
-			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
-		}
+		// Use safeRedirectURL which is already validated against open redirects
+		http.Redirect(w, r, safeRedirectURL, http.StatusSeeOther)
 	case "password":
 		http.Redirect(w, r, "/login/password?login_id="+loginID+returnParam, http.StatusSeeOther)
 	case "email":
@@ -291,10 +316,17 @@ type PasswordLoginVM struct {
 
 // showPasswordLogin displays the password login form.
 func (h *Handler) showPasswordLogin(w http.ResponseWriter, r *http.Request) {
+	// Use SafeBackURL to prevent open redirect attacks
+	safeReturnURL := navigation.SafeBackURL(r, loginBackURLOptions)
+	returnURL := ""
+	if safeReturnURL != loginBackURLOptions.Fallback {
+		returnURL = safeReturnURL
+	}
+
 	vm := PasswordLoginVM{
 		BaseVM:    viewdata.New(r),
 		LoginID:   r.URL.Query().Get("login_id"),
-		ReturnURL: r.URL.Query().Get("return"),
+		ReturnURL: returnURL,
 	}
 	vm.Title = "Enter Password"
 
@@ -311,6 +343,8 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 
 	loginID := r.FormValue("login_id")
 	password := r.FormValue("password")
+	// Use SafeBackURL to prevent open redirect attacks
+	safeRedirectURL := navigation.SafeBackURL(r, loginBackURLOptions)
 
 	user, err := h.userStore.GetByLoginID(r.Context(), loginID)
 	if err != nil {
@@ -364,7 +398,8 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+	// Use safeRedirectURL which is already validated against open redirects
+	http.Redirect(w, r, safeRedirectURL, http.StatusSeeOther)
 }
 
 // EmailLoginVM is the view model for email login.

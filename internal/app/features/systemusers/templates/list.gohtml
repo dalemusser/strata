@@ -184,6 +184,7 @@
           action="/system-users/{{ .ID }}/delete"
           onsubmit="return confirm('Are you sure you want to delete this system user?');"
         >
+          <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
           <input type="hidden" name="return" value="{{ .BackURL }}">
           <button
             type="submit"

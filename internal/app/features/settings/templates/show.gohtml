@@ -16,6 +16,7 @@
 
     <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
         <form method="POST" enctype="multipart/form-data" class="space-y-6">
+            <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
             <div>
                 <label for="site_name" class="block text-sm font-medium mb-1">Workspace Name</label>
                 <input type="text" id="site_name" name="site_name" value="{{ .Settings.SiteName }}" required

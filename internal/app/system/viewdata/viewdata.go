@@ -12,10 +12,12 @@ import (
 
 	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
 	"github.com/dalemusser/strata/internal/app/system/authz"
+	"github.com/dalemusser/strata/internal/app/system/htmlsanitize"
 	"github.com/dalemusser/strata/internal/app/system/timeouts"
 	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/pantry/httpnav"
 	"github.com/dalemusser/waffle/pantry/storage"
+	"github.com/gorilla/csrf"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -59,6 +61,9 @@ type BaseVM struct {
 	Title       string
 	BackURL     string
 	CurrentPath string
+
+	// Security
+	CSRFToken string // CSRF token for forms (use in hidden input field)
 
 	// Announcements for banner display
 	Announcements []AnnouncementVM
@@ -110,6 +115,7 @@ func NewBaseVM(r *http.Request, db *mongo.Database, title, backDefault string) B
 		Title:           title,
 		BackURL:         httpnav.ResolveBackURL(r, backDefault),
 		CurrentPath:     httpnav.CurrentPath(r),
+		CSRFToken:       csrf.Token(r),
 	}
 
 	if db != nil {
@@ -120,7 +126,7 @@ func NewBaseVM(r *http.Request, db *mongo.Database, title, backDefault string) B
 		settings, err := store.Get(ctx)
 		if err == nil && settings != nil {
 			vm.SiteName = settings.SiteName
-			vm.FooterHTML = template.HTML(settings.FooterHTML)
+			vm.FooterHTML = htmlsanitize.SanitizeToHTML(settings.FooterHTML)
 			if settings.HasLogo() && storageProvider != nil {
 				vm.LogoURL = storageProvider.URL(settings.LogoPath)
 			}
@@ -184,6 +190,7 @@ func New(r *http.Request) BaseVM {
 		UserName:        name,
 		ThemePreference: authz.ThemePreference(r),
 		CurrentPath:     httpnav.CurrentPath(r),
+		CSRFToken:       csrf.Token(r),
 	}
 
 	// Load site settings if database is available
@@ -195,7 +202,7 @@ func New(r *http.Request) BaseVM {
 		settings, err := store.Get(ctx)
 		if err == nil && settings != nil {
 			vm.SiteName = settings.SiteName
-			vm.FooterHTML = template.HTML(settings.FooterHTML)
+			vm.FooterHTML = htmlsanitize.SanitizeToHTML(settings.FooterHTML)
 			if settings.HasLogo() && storageProvider != nil {
 				vm.LogoURL = storageProvider.URL(settings.LogoPath)
 			}

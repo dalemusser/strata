@@ -175,13 +175,23 @@ func (s *Store) List(ctx context.Context) ([]Announcement, error) {
 }
 
 // GetActive returns all currently active announcements that should be displayed.
+// This performs all time-based filtering in MongoDB for efficiency.
 func (s *Store) GetActive(ctx context.Context) ([]Announcement, error) {
 	now := time.Now()
+	// Filter in MongoDB: active=true, starts_at is null or <= now, ends_at is null or > now
 	filter := bson.M{
 		"active": true,
-		"$or": []bson.M{
-			{"starts_at": nil},
-			{"starts_at": bson.M{"$lte": now}},
+		"$and": []bson.M{
+			// starts_at condition: null or started
+			{"$or": []bson.M{
+				{"starts_at": nil},
+				{"starts_at": bson.M{"$lte": now}},
+			}},
+			// ends_at condition: null or not yet ended
+			{"$or": []bson.M{
+				{"ends_at": nil},
+				{"ends_at": bson.M{"$gt": now}},
+			}},
 		},
 	}
 
@@ -197,15 +207,7 @@ func (s *Store) GetActive(ctx context.Context) ([]Announcement, error) {
 		return nil, err
 	}
 
-	// Filter out expired announcements
-	active := make([]Announcement, 0, len(announcements))
-	for _, ann := range announcements {
-		if ann.EndsAt == nil || ann.EndsAt.After(now) {
-			active = append(active, ann)
-		}
-	}
-
-	return active, nil
+	return announcements, nil
 }
 
 // SetActive sets the active status of an announcement.

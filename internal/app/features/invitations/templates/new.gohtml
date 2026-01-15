@@ -25,6 +25,7 @@
   </p>
 
   <form method="POST" action="/invitations/new" class="space-y-4 max-w-md">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <!-- Email Field -->
     <div>
       <label for="email" class="block font-semibold mb-1">Email Address</label>

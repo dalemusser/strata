@@ -100,6 +100,7 @@
         <!-- Resend -->
         <form method="POST" action="/invitations/{{ .ID }}/resend"
               onsubmit="return confirm('Resend invitation to {{ .Email }}?');">
+          <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
           <button
             type="submit"
             class="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700"
@@ -111,6 +112,7 @@
         <!-- Revoke -->
         <form method="POST" action="/invitations/{{ .ID }}/revoke"
               onsubmit="return confirm('Revoke invitation for {{ .Email }}?');">
+          <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
           <button
             type="submit"
             class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
