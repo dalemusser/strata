@@ -456,18 +456,21 @@ func classifySessionError(err error) (sessionErrorType, string) {
 | Session Management                                                           |
 *─────────────────────────────────────────────────────────────────────────────*/
 
-// CreateSession establishes a session for the user and returns the session token.
-func (sm *SessionManager) CreateSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
+// CreateSession establishes a session for the user.
+// If token is empty, a new token will be generated.
+func (sm *SessionManager) CreateSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role, token string) error {
 	sess, err := sm.store.Get(r, sm.name)
 	if err != nil {
 		// Create new session if can't get existing
 		sess, _ = sm.store.New(r, sm.name)
 	}
 
-	// Generate a unique session token for session management
-	token, err := generateSessionToken()
-	if err != nil {
-		return err
+	// Use provided token or generate a new one
+	if token == "" {
+		token, err = GenerateSessionToken()
+		if err != nil {
+			return err
+		}
 	}
 
 	sess.Values[isAuthKey] = true
@@ -487,8 +490,8 @@ func (sm *SessionManager) GetSessionToken(r *http.Request) string {
 	return getString(sess, sessionTokenKey)
 }
 
-// generateSessionToken generates a random URL-safe token.
-func generateSessionToken() (string, error) {
+// GenerateSessionToken generates a random URL-safe token for session tracking.
+func GenerateSessionToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err

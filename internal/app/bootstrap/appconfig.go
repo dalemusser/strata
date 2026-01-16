@@ -41,6 +41,11 @@ type AppConfig struct {
 	// CSRF protection configuration
 	CSRFKey string // Secret key for CSRF token signing (32 bytes, must be strong in production)
 
+	// API key authentication (for external API consumers)
+	// When set, enables Bearer token authentication for /api/* routes.
+	// Leave empty to disable API key authentication.
+	APIKey string
+
 	// File storage configuration
 	StorageType      string // Storage backend: "local" or "s3"
 	StorageLocalPath string // Local storage path (e.g., "./uploads")

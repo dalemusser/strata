@@ -7,6 +7,17 @@
     <link rel="stylesheet" href="/assets/css/tailwind.css">
     <link rel="stylesheet" href="/assets/css/tiptap.css">
     <script src="/assets/js/htmx.min.js"></script>
+    {{ if .CSRFToken }}<meta name="csrf-token" content="{{ .CSRFToken }}">{{ end }}
+    <script>
+      // CSRF token injection for HTMX requests
+      // Use 'document' instead of 'document.body' since body doesn't exist yet in <head>
+      document.addEventListener('htmx:configRequest', function(evt) {
+        var token = document.querySelector('meta[name="csrf-token"]');
+        if (token) {
+          evt.detail.headers['X-CSRF-Token'] = token.content;
+        }
+      });
+    </script>
     <script>
       // Initialize dark mode before page renders to prevent flash
       (function() {
@@ -323,6 +334,56 @@
         });
       })();
     </script>
+
+    {{ if .IsLoggedIn }}
+    <script>
+      // Activity heartbeat - sends pulse every 60 seconds for session tracking
+      (function() {
+        var heartbeatInterval = 60000; // 60 seconds
+        var heartbeatTimer = null;
+        var heartbeatUrl = '/api/heartbeat';
+
+        function sendHeartbeat() {
+          var headers = {'Content-Type': 'application/json'};
+          var csrfToken = document.querySelector('meta[name="csrf-token"]');
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken.content;
+          fetch(heartbeatUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: headers,
+            body: JSON.stringify({page: window.location.pathname})
+          }).then(function(response) {
+            if (response.status === 401) {
+              // Session was terminated by admin - redirect to logout
+              stopHeartbeat();
+              window.location.href = '/logout';
+            }
+          }).catch(function() {
+            // Silent fail - don't interrupt user experience
+          });
+        }
+
+        function startHeartbeat() {
+          if (heartbeatTimer) return;
+          sendHeartbeat();
+          heartbeatTimer = setInterval(sendHeartbeat, heartbeatInterval);
+        }
+
+        function stopHeartbeat() {
+          if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+          }
+        }
+
+        startHeartbeat();
+        document.addEventListener('visibilitychange', function() {
+          document.hidden ? stopHeartbeat() : startHeartbeat();
+        });
+        window.addEventListener('beforeunload', stopHeartbeat);
+      })();
+    </script>
+    {{ end }}
   </body>
 </html>
 {{ end }}

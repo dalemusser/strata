@@ -12,6 +12,7 @@ import (
 	dashboardfeature "github.com/dalemusser/strata/internal/app/features/dashboard"
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
 	healthfeature "github.com/dalemusser/strata/internal/app/features/health"
+	heartbeatfeature "github.com/dalemusser/strata/internal/app/features/heartbeat"
 	homefeature "github.com/dalemusser/strata/internal/app/features/home"
 	invitationsfeature "github.com/dalemusser/strata/internal/app/features/invitations"
 	loginfeature "github.com/dalemusser/strata/internal/app/features/login"
@@ -21,6 +22,7 @@ import (
 	settingsfeature "github.com/dalemusser/strata/internal/app/features/settings"
 	systemusersfeature "github.com/dalemusser/strata/internal/app/features/systemusers"
 	appresources "github.com/dalemusser/strata/internal/app/resources"
+	"github.com/dalemusser/strata/internal/app/store/activity"
 	announcementstore "github.com/dalemusser/strata/internal/app/store/announcement"
 	"github.com/dalemusser/strata/internal/app/store/audit"
 	"github.com/dalemusser/strata/internal/app/store/oauthstate"
@@ -53,6 +55,20 @@ import (
 //  2. Mount feature routers for different parts of your application
 //  3. Add any additional middleware needed for specific routes
 //  4. Return the configured router as an http.Handler
+//
+// # Mixed Authentication Routes
+//
+// For applications that need both session-based web UI and API key-based
+// external API access, see docs/mixed_auth_routes.md for the recommended pattern.
+//
+// In summary:
+//   - Web UI routes: session auth + CSRF + restrictive CORS
+//   - API routes: API key auth + no CSRF + permissive CORS
+//
+// Strata provides helper packages for API routes:
+//   - auth.APIKeyAuth: Bearer token authentication middleware
+//   - apicors.Middleware: Permissive CORS for API endpoints
+//   - jsonutil: JSON response helpers
 func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, logger *zap.Logger) (http.Handler, error) {
 	// Create the session manager using app config.
 	// Secure cookies are enabled in production mode.
@@ -115,6 +131,9 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	// Create sessions store for activity tracking.
 	sessionsStore := sessions.New(deps.MongoDatabase)
 
+	// Create activity store for logging user events.
+	activityStore := activity.New(deps.MongoDatabase)
+
 	r := chi.NewRouter()
 
 	// Request timeout middleware: prevents requests from hanging indefinitely.
@@ -131,8 +150,7 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 
 	// CSRF protection middleware: protects POST/PUT/DELETE requests from cross-site request forgery.
 	// The CSRF token must be included in forms as a hidden field or in the X-CSRF-Token header.
-	csrfMiddleware := csrf.Protect(
-		[]byte(appCfg.CSRFKey),
+	csrfOpts := []csrf.Option{
 		csrf.Secure(secure),
 		csrf.Path("/"),
 		csrf.CookieName("csrf_token"),
@@ -151,7 +169,24 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 			}
 			http.Error(w, "CSRF token invalid or missing", http.StatusForbidden)
 		})),
-	)
+	}
+	// In dev mode, trust localhost origins for CSRF validation.
+	// gorilla/csrf validates the Origin header's Host against TrustedOrigins (not the full URL).
+	trustedOrigins := []string{
+		"localhost:8080",
+		"localhost:3000",
+		"127.0.0.1:8080",
+		"127.0.0.1:3000",
+	}
+	if !secure {
+		csrfOpts = append(csrfOpts, csrf.TrustedOrigins(trustedOrigins))
+	}
+	// Set CSRF cookie domain to match session domain when configured.
+	// This ensures CSRF cookie is shared across subdomains (if any).
+	if appCfg.SessionDomain != "" {
+		csrfOpts = append(csrfOpts, csrf.Domain(appCfg.SessionDomain))
+	}
+	csrfMiddleware := csrf.Protect([]byte(appCfg.CSRFKey), csrfOpts...)
 	r.Use(csrfMiddleware)
 
 	// Health check endpoint for load balancers and orchestrators
@@ -208,6 +243,7 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 		deps.Mailer,
 		auditLogger,
 		sessionsStore,
+		activityStore,
 		appCfg.BaseURL,
 		appCfg.EmailVerifyExpiry,
 		googleEnabled,
@@ -216,8 +252,12 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	)
 	r.Mount("/login", loginfeature.Routes(loginHandler))
 
-	logoutHandler := logoutfeature.NewHandler(sessionMgr, auditLogger, sessionsStore, logger)
+	logoutHandler := logoutfeature.NewHandler(sessionMgr, auditLogger, sessionsStore, activityStore, logger)
 	r.Mount("/logout", logoutfeature.Routes(logoutHandler, sessionMgr))
+
+	// Heartbeat API for activity tracking
+	heartbeatHandler := heartbeatfeature.NewHandler(sessionsStore, activityStore, sessionMgr, logger)
+	r.Mount("/api/heartbeat", heartbeatfeature.Routes(heartbeatHandler, sessionMgr))
 
 	// Google OAuth (only mount if configured)
 	if googleEnabled {
@@ -253,6 +293,10 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	// Role-based dashboards
 	dashboardHandler := dashboardfeature.NewHandler(deps.MongoDatabase, logger)
 	r.Mount("/dashboard", dashboardfeature.Routes(dashboardHandler, sessionMgr))
+
+	// Active sessions dashboard (admin only)
+	sessionsHandler := dashboardfeature.NewSessionsHandler(deps.MongoDatabase, sessionsStore, logger)
+	r.Mount("/dashboard/sessions", dashboardfeature.SessionsRoutes(sessionsHandler, sessionMgr))
 
 	// System user management (admin only)
 	sysUsersHandler := systemusersfeature.NewHandler(deps.MongoDatabase, errLog, auditLogger, logger)

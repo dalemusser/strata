@@ -8,6 +8,7 @@ package auditlog
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
@@ -16,13 +17,14 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/timezones"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
-	"github.com/dalemusser/strata/internal/domain/models"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
+
+const pageSize = 50
 
 // Handler provides audit log handlers.
 type Handler struct {
@@ -46,35 +48,105 @@ func NewHandler(
 	}
 }
 
-// EventDisplay represents an audit event for display.
-type EventDisplay struct {
-	audit.Event
-	UserName    string
-	UserLoginID string
-	ActorName   string
-}
-
-// ListVM is the view model for the audit log list.
-type ListVM struct {
-	viewdata.BaseVM
-	Events         []EventDisplay
-	Filter         FilterParams
-	TotalCount     int64
-	Page           int
-	PrevPage       int
-	NextPage       int
-	PageSize       int
-	TotalPages     int
-	TimezoneGroups []timezones.ZoneGroup
-}
-
-// FilterParams represents the filter parameters.
-type FilterParams struct {
+// listItem represents a single audit event row for display.
+type listItem struct {
+	ID        string
+	Timestamp time.Time
 	Category  string
 	EventType string
-	UserID    string
+	ActorName string // Resolved from ActorID
+	IP        string
+	Success   bool
+	Details   map[string]string
+}
+
+// listData is the view model for the audit log list page.
+type listData struct {
+	viewdata.BaseVM
+
+	Items []listItem
+
+	// Filters
+	Category  string
+	EventType string
 	StartDate string
 	EndDate   string
+	Timezone  string
+
+	// Filter options
+	Categories []categoryOption
+	EventTypes []string
+
+	// Timezone selector
+	TimezoneGroups []timezones.ZoneGroup
+
+	// Pagination
+	Page       int
+	TotalPages int
+	Total      int64
+	Shown      int
+	RangeStart int
+	RangeEnd   int
+	HasPrev    bool
+	HasNext    bool
+	PrevPage   int
+	NextPage   int
+}
+
+// categoryOption represents a category for the filter dropdown.
+type categoryOption struct {
+	Value string
+	Label string
+}
+
+// allCategories returns the available categories for filtering.
+func allCategories() []categoryOption {
+	return []categoryOption{
+		{Value: audit.CategoryAuth, Label: "Authentication"},
+		{Value: audit.CategoryAdmin, Label: "Administration"},
+	}
+}
+
+// eventTypesForCategory returns the event types for a given category.
+// If category is empty, returns all event types.
+func eventTypesForCategory(category string) []string {
+	authEvents := []string{
+		audit.EventLoginSuccess,
+		audit.EventLoginFailedUserNotFound,
+		audit.EventLoginFailedWrongPassword,
+		audit.EventLoginFailedUserDisabled,
+		audit.EventLogout,
+		audit.EventPasswordChanged,
+		audit.EventVerificationCodeSent,
+		audit.EventVerificationCodeResent,
+		audit.EventVerificationCodeFailed,
+		audit.EventMagicLinkUsed,
+	}
+
+	adminEvents := []string{
+		audit.EventUserCreated,
+		audit.EventUserUpdated,
+		audit.EventUserDisabled,
+		audit.EventUserEnabled,
+		audit.EventUserDeleted,
+		audit.EventSettingsUpdated,
+		audit.EventPageUpdated,
+	}
+
+	switch category {
+	case audit.CategoryAuth:
+		return authEvents
+	case audit.CategoryAdmin:
+		return adminEvents
+	case "":
+		// Return all event types when no category selected
+		all := make([]string, 0, len(authEvents)+len(adminEvents))
+		all = append(all, authEvents...)
+		all = append(all, adminEvents...)
+		return all
+	default:
+		return nil
+	}
 }
 
 // Routes returns a chi.Router with audit log routes mounted.
@@ -89,135 +161,172 @@ func Routes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 
 // list displays the audit log with filtering and pagination.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+	// Get filter parameters
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	eventType := strings.TrimSpace(r.URL.Query().Get("event_type"))
+	startDate := strings.TrimSpace(r.URL.Query().Get("start_date"))
+	endDate := strings.TrimSpace(r.URL.Query().Get("end_date"))
+	tzParam := strings.TrimSpace(r.URL.Query().Get("tz"))
+	pageStr := r.URL.Query().Get("page")
 
-	// Parse pagination
 	page := 1
-	if p := q.Get("page"); p != "" {
-		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
-			page = parsed
+	if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+		page = p
+	}
+
+	// Load timezone location for date parsing (fall back to Local if invalid)
+	loc := time.Local
+	if tzParam != "" {
+		if parsedLoc, err := time.LoadLocation(tzParam); err == nil {
+			loc = parsedLoc
 		}
 	}
-	pageSize := 50
 
-	// Parse filters
+	// Build query filter
 	filter := audit.QueryFilter{
-		Category:  q.Get("category"),
-		EventType: q.Get("event_type"),
-		Limit:     int64(pageSize),
+		Category:  category,
+		EventType: eventType,
+		Limit:     pageSize,
 		Offset:    int64((page - 1) * pageSize),
 	}
 
-	if userID := q.Get("user_id"); userID != "" {
-		if objID, err := primitive.ObjectIDFromHex(userID); err == nil {
-			filter.UserID = &objID
-		}
-	}
-
-	if startDate := q.Get("start_date"); startDate != "" {
-		if t, err := time.Parse("2006-01-02", startDate); err == nil {
+	// Parse dates in user's selected timezone
+	if startDate != "" {
+		if t, err := time.ParseInLocation("2006-01-02", startDate, loc); err == nil {
 			filter.StartTime = &t
 		}
 	}
-
-	if endDate := q.Get("end_date"); endDate != "" {
-		if t, err := time.Parse("2006-01-02", endDate); err == nil {
+	if endDate != "" {
+		if t, err := time.ParseInLocation("2006-01-02", endDate, loc); err == nil {
+			// End of day
 			endOfDay := t.Add(24*time.Hour - time.Second)
 			filter.EndTime = &endOfDay
 		}
 	}
 
-	// Query events
+	// Query audit store
 	events, err := h.auditStore.Query(r.Context(), filter)
 	if err != nil {
+		h.logger.Error("failed to query audit events", zap.Error(err))
 		h.errLog.Log(r, "failed to query audit events", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	// Get total count for pagination
-	totalCount, err := h.auditStore.CountByFilter(r.Context(), filter)
+	total, err := h.auditStore.CountByFilter(r.Context(), filter)
 	if err != nil {
-		h.errLog.Log(r, "failed to count audit events", err)
-		totalCount = 0
+		h.logger.Error("failed to count audit events", zap.Error(err))
+		total = 0
 	}
 
-	// Build user lookup map - collect unique user IDs first
-	userIDSet := make(map[primitive.ObjectID]bool)
+	// Collect unique user IDs for name resolution
+	userIDs := make(map[primitive.ObjectID]struct{})
 	for _, e := range events {
-		if e.UserID != nil {
-			userIDSet[*e.UserID] = true
-		}
 		if e.ActorID != nil {
-			userIDSet[*e.ActorID] = true
+			userIDs[*e.ActorID] = struct{}{}
+		}
+		if e.UserID != nil {
+			userIDs[*e.UserID] = struct{}{}
 		}
 	}
 
-	// Convert to slice and fetch all users in a single batch query
-	userIDs := make([]primitive.ObjectID, 0, len(userIDSet))
-	for id := range userIDSet {
-		userIDs = append(userIDs, id)
-	}
-
-	userMap := make(map[primitive.ObjectID]*models.User)
+	// Batch fetch user names
+	userNames := make(map[primitive.ObjectID]string)
 	if len(userIDs) > 0 {
-		users, err := h.userStore.GetByIDs(r.Context(), userIDs)
+		ids := make([]primitive.ObjectID, 0, len(userIDs))
+		for id := range userIDs {
+			ids = append(ids, id)
+		}
+		users, err := h.userStore.GetByIDs(r.Context(), ids)
 		if err != nil {
-			h.logger.Warn("failed to fetch users for audit log", zap.Error(err))
+			h.logger.Warn("failed to fetch user names for audit log", zap.Error(err))
 		} else {
-			for i := range users {
-				userMap[users[i].ID] = &users[i]
+			for _, u := range users {
+				userNames[u.ID] = u.FullName
 			}
 		}
 	}
 
-	// Build display events
-	displayEvents := make([]EventDisplay, len(events))
-	for i, e := range events {
-		display := EventDisplay{Event: e}
-		if e.UserID != nil {
-			if user, ok := userMap[*e.UserID]; ok {
-				display.UserName = user.FullName
-				if user.LoginID != nil {
-					display.UserLoginID = *user.LoginID
-				}
-			}
+	// Build list items
+	items := make([]listItem, 0, len(events))
+	for _, e := range events {
+		item := listItem{
+			ID:        e.ID.Hex(),
+			Timestamp: e.CreatedAt,
+			Category:  e.Category,
+			EventType: e.EventType,
+			IP:        e.IP,
+			Success:   e.Success,
+			Details:   e.Details,
 		}
+		// Resolve actor name
 		if e.ActorID != nil {
-			if user, ok := userMap[*e.ActorID]; ok {
-				display.ActorName = user.FullName
+			if name, ok := userNames[*e.ActorID]; ok {
+				item.ActorName = name
 			}
+			// Don't show raw ObjectID for deleted users - leave blank
+		} else if e.UserID != nil && e.Category == audit.CategoryAuth {
+			// For auth events, the user is the actor (they're logging in/out themselves)
+			if name, ok := userNames[*e.UserID]; ok {
+				item.ActorName = name
+			}
+			// Don't show raw ObjectID for deleted users - leave blank
 		}
-		displayEvents[i] = display
+		items = append(items, item)
 	}
 
-	totalPages := int(totalCount) / pageSize
-	if int(totalCount)%pageSize > 0 {
-		totalPages++
+	// Calculate pagination
+	totalPages := int((total + pageSize - 1) / pageSize)
+	if totalPages < 1 {
+		totalPages = 1
 	}
+
+	prevPage := page - 1
+	if prevPage < 1 {
+		prevPage = 1
+	}
+	nextPage := page + 1
+	if nextPage > totalPages {
+		nextPage = totalPages
+	}
+
+	// Get event types for selected category (or all if no category selected)
+	eventTypes := eventTypesForCategory(category)
 
 	// Get timezone groups for selector
 	tzGroups, _ := timezones.Groups()
 
-	vm := ListVM{
-		BaseVM: viewdata.New(r),
-		Events: displayEvents,
-		Filter: FilterParams{
-			Category:  q.Get("category"),
-			EventType: q.Get("event_type"),
-			UserID:    q.Get("user_id"),
-			StartDate: q.Get("start_date"),
-			EndDate:   q.Get("end_date"),
-		},
-		TotalCount:     totalCount,
-		Page:           page,
-		PrevPage:       page - 1,
-		NextPage:       page + 1,
-		PageSize:       pageSize,
-		TotalPages:     totalPages,
+	// Calculate range for display
+	rangeStart := (page-1)*pageSize + 1
+	rangeEnd := rangeStart + len(items) - 1
+	if len(items) == 0 {
+		rangeStart = 0
+		rangeEnd = 0
+	}
+
+	vm := listData{
+		BaseVM:         viewdata.New(r),
+		Items:          items,
+		Category:       category,
+		EventType:      eventType,
+		StartDate:      startDate,
+		EndDate:        endDate,
+		Timezone:       tzParam,
+		Categories:     allCategories(),
+		EventTypes:     eventTypes,
 		TimezoneGroups: tzGroups,
+		Page:           page,
+		TotalPages:     totalPages,
+		Total:          total,
+		Shown:          len(items),
+		RangeStart:     rangeStart,
+		RangeEnd:       rangeEnd,
+		HasPrev:        page > 1,
+		HasNext:        page < totalPages,
+		PrevPage:       prevPage,
+		NextPage:       nextPage,
 	}
 	vm.Title = "Audit Log"
 
-	templates.Render(w, r, "auditlog/list", vm)
+	templates.RenderAutoMap(w, r, "auditlog/list", nil, vm)
 }

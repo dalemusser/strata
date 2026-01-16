@@ -10,6 +10,7 @@ import (
 	"time"
 
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
+	"github.com/dalemusser/strata/internal/app/store/activity"
 	"github.com/dalemusser/strata/internal/app/store/emailverify"
 	"github.com/dalemusser/strata/internal/app/store/passwordreset"
 	"github.com/dalemusser/strata/internal/app/store/sessions"
@@ -18,21 +19,16 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
 	"github.com/dalemusser/strata/internal/app/system/authutil"
 	"github.com/dalemusser/strata/internal/app/system/mailer"
-	"github.com/dalemusser/strata/internal/app/system/navigation"
 	"github.com/dalemusser/strata/internal/app/system/network"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
+	"github.com/dalemusser/waffle/pantry/query"
 	"github.com/dalemusser/waffle/pantry/templates"
+	"github.com/dalemusser/waffle/pantry/urlutil"
 	"github.com/go-chi/chi/v5"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
-
-// loginBackURLOptions provides safe redirect URL options for login.
-// Allows any URL that starts with "/" (relative URLs only) and falls back to dashboard.
-var loginBackURLOptions = navigation.BackURLOptions{
-	Fallback: "/dashboard",
-}
 
 // Handler provides login handlers.
 type Handler struct {
@@ -40,6 +36,7 @@ type Handler struct {
 	emailVerifyStore   *emailverify.Store
 	passwordResetStore *passwordreset.Store
 	sessionsStore      *sessions.Store
+	activityStore      *activity.Store
 	sessionMgr         *auth.SessionManager
 	errLog             *errorsfeature.ErrorLogger
 	mailer             *mailer.Mailer
@@ -60,6 +57,7 @@ func NewHandler(
 	m *mailer.Mailer,
 	auditLogger *auditlog.Logger,
 	sessionsStore *sessions.Store,
+	activityStore *activity.Store,
 	baseURL string,
 	emailVerifyExpiry time.Duration,
 	googleEnabled bool,
@@ -77,6 +75,7 @@ func NewHandler(
 		emailVerifyStore:   emailverify.New(db, emailVerifyExpiry),
 		passwordResetStore: passwordreset.New(db, passwordResetExpiry),
 		sessionsStore:      sessionsStore,
+		activityStore:      activityStore,
 		sessionMgr:         sessionMgr,
 		errLog:             errLog,
 		mailer:             m,
@@ -134,18 +133,10 @@ func Routes(h *Handler) http.Handler {
 
 // showLogin displays the login page with login_id field.
 func (h *Handler) showLogin(w http.ResponseWriter, r *http.Request) {
-	// Use SafeBackURL to prevent open redirect attacks
-	safeReturnURL := navigation.SafeBackURL(r, loginBackURLOptions)
-	// Only include return URL if it's not the default fallback
-	returnURL := ""
-	if safeReturnURL != loginBackURLOptions.Fallback {
-		returnURL = safeReturnURL
-	}
-
 	vm := LoginVM{
 		BaseVM:        viewdata.New(r),
 		GoogleEnabled: h.googleEnabled,
-		ReturnURL:     returnURL,
+		ReturnURL:     query.Get(r, "return"),
 		Error:         r.URL.Query().Get("error"),
 	}
 	vm.Title = "Login"
@@ -162,13 +153,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	loginID := r.FormValue("login_id")
-	// Use SafeBackURL to prevent open redirect attacks
-	safeRedirectURL := navigation.SafeBackURL(r, loginBackURLOptions)
-	// For passing to VM, only include if it's not the default
-	returnURL := ""
-	if safeRedirectURL != loginBackURLOptions.Fallback {
-		returnURL = safeRedirectURL
-	}
+	returnURL := r.FormValue("return")
 
 	if loginID == "" {
 		vm := LoginVM{
@@ -186,7 +171,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	user, err := h.userStore.GetByLoginID(r.Context(), loginID)
 	if err != nil {
 		// User not found - show error
-		h.auditLogger.LogAuthEvent(r, nil, "login_failed_user_not_found", false, "user not found")
+		h.auditLogger.LoginFailedUserNotFound(r.Context(), r, loginID)
 		vm := LoginVM{
 			BaseVM:        viewdata.New(r),
 			GoogleEnabled: h.googleEnabled,
@@ -228,8 +213,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.auditLogger.LogAuthEvent(r, &user.ID, "login_success", true, "")
-		// Use safeRedirectURL which is already validated against open redirects
-		http.Redirect(w, r, safeRedirectURL, http.StatusSeeOther)
+		http.Redirect(w, r, urlutil.SafeReturn(returnURL, "", "/dashboard"), http.StatusSeeOther)
 	case "password":
 		http.Redirect(w, r, "/login/password?login_id="+loginID+returnParam, http.StatusSeeOther)
 	case "email":
@@ -271,7 +255,7 @@ func (h *Handler) handleTrustLogin(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userStore.GetByLoginID(r.Context(), loginID)
 	if err != nil {
-		h.auditLogger.LogAuthEvent(r, nil, "login_failed_user_not_found", false, "user not found")
+		h.auditLogger.LoginFailedUserNotFound(r.Context(), r, loginID)
 
 		vm := TrustLoginVM{
 			BaseVM:  viewdata.New(r),
@@ -316,17 +300,10 @@ type PasswordLoginVM struct {
 
 // showPasswordLogin displays the password login form.
 func (h *Handler) showPasswordLogin(w http.ResponseWriter, r *http.Request) {
-	// Use SafeBackURL to prevent open redirect attacks
-	safeReturnURL := navigation.SafeBackURL(r, loginBackURLOptions)
-	returnURL := ""
-	if safeReturnURL != loginBackURLOptions.Fallback {
-		returnURL = safeReturnURL
-	}
-
 	vm := PasswordLoginVM{
 		BaseVM:    viewdata.New(r),
 		LoginID:   r.URL.Query().Get("login_id"),
-		ReturnURL: returnURL,
+		ReturnURL: query.Get(r, "return"),
 	}
 	vm.Title = "Enter Password"
 
@@ -343,12 +320,11 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 
 	loginID := r.FormValue("login_id")
 	password := r.FormValue("password")
-	// Use SafeBackURL to prevent open redirect attacks
-	safeRedirectURL := navigation.SafeBackURL(r, loginBackURLOptions)
+	returnURL := r.FormValue("return")
 
 	user, err := h.userStore.GetByLoginID(r.Context(), loginID)
 	if err != nil {
-		h.auditLogger.LogAuthEvent(r, nil, "login_failed_user_not_found", false, "user not found")
+		h.auditLogger.LoginFailedUserNotFound(r.Context(), r, loginID)
 
 		vm := PasswordLoginVM{
 			BaseVM:  viewdata.New(r),
@@ -398,8 +374,7 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use safeRedirectURL which is already validated against open redirects
-	http.Redirect(w, r, safeRedirectURL, http.StatusSeeOther)
+	http.Redirect(w, r, urlutil.SafeReturn(returnURL, "", "/dashboard"), http.StatusSeeOther)
 }
 
 // EmailLoginVM is the view model for email login.
@@ -800,15 +775,15 @@ func (h *Handler) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 
 // createTrackedSession creates a session in both the cookie and MongoDB for tracking.
 func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
-	// First create the cookie session
-	if err := h.sessionMgr.CreateSession(w, r, userID, role); err != nil {
+	// Generate token first so we can use it for both cookie and MongoDB tracking
+	token, err := auth.GenerateSessionToken()
+	if err != nil {
 		return err
 	}
 
-	// Get the session token that was just created
-	token := h.sessionMgr.GetSessionToken(r)
-	if token == "" {
-		return nil // No tracking if no token
+	// Create the cookie session with the generated token
+	if err := h.sessionMgr.CreateSession(w, r, userID, role, token); err != nil {
+		return err
 	}
 
 	// Store session in MongoDB for tracking
@@ -818,13 +793,19 @@ func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, u
 		UserID:       userID,
 		IPAddress:    network.GetClientIP(r),
 		UserAgent:    r.UserAgent(),
-		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
+		LoginAt:      now,
 		LastActivity: now,
+		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
 	}
 
 	// Best effort - don't fail login if tracking fails
 	if err := h.sessionsStore.Create(r.Context(), session); err != nil {
 		h.logger.Warn("failed to track session", zap.Error(err))
+	} else if h.activityStore != nil {
+		// Record login activity event
+		if err := h.activityStore.RecordLogin(r.Context(), userID, session.ID, network.GetClientIP(r), r.UserAgent()); err != nil {
+			h.logger.Warn("failed to record login activity", zap.Error(err))
+		}
 	}
 
 	return nil

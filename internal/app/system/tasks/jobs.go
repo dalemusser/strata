@@ -125,3 +125,41 @@ func EmailVerificationCleanupJob(db *mongo.Database, logger *zap.Logger) Job {
 		},
 	}
 }
+
+// InactiveSessionCleanupJob creates a job that closes sessions inactive for longer than
+// the specified threshold. This marks sessions as ended (with end_reason="inactive")
+// rather than deleting them, preserving session history for auditing.
+func InactiveSessionCleanupJob(db *mongo.Database, logger *zap.Logger, threshold time.Duration) Job {
+	return Job{
+		Name:     "inactive-session-cleanup",
+		Interval: 5 * time.Minute,
+		Run: func(ctx context.Context) error {
+			coll := db.Collection("sessions")
+			cutoff := time.Now().Add(-threshold)
+			now := time.Now()
+
+			result, err := coll.UpdateMany(ctx,
+				bson.M{
+					"logout_at":     nil,
+					"last_activity": bson.M{"$lt": cutoff},
+				},
+				bson.M{
+					"$set": bson.M{
+						"logout_at":  now,
+						"end_reason": "inactive",
+						"updated_at": now,
+					},
+				},
+			)
+			if err != nil {
+				return err
+			}
+			if result.ModifiedCount > 0 {
+				logger.Info("closed inactive sessions",
+					zap.Int64("count", result.ModifiedCount),
+					zap.Duration("threshold", threshold))
+			}
+			return nil
+		},
+	}
+}

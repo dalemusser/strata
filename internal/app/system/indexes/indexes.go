@@ -43,6 +43,12 @@ func EnsureAll(ctx context.Context, db *mongo.Database) error {
 	if err := ensureAuditLogs(ctx, db); err != nil {
 		problems = append(problems, "audit_logs: "+err.Error())
 	}
+	if err := ensureSessions(ctx, db); err != nil {
+		problems = append(problems, "sessions: "+err.Error())
+	}
+	if err := ensureActivityEvents(ctx, db); err != nil {
+		problems = append(problems, "activity_events: "+err.Error())
+	}
 
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
@@ -386,6 +392,63 @@ func ensureAuditLogs(ctx context.Context, db *mongo.Database) error {
 				{Key: "created_at", Value: -1},
 			},
 			Options: options.Index().SetName("idx_audit_actor_created"),
+		},
+	})
+}
+
+func ensureSessions(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("sessions")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Lookup by token (unique)
+		{
+			Keys: bson.D{
+				{Key: "token", Value: 1},
+			},
+			Options: options.Index().SetUnique(true).SetName("idx_session_token"),
+		},
+		// Lookup by user
+		{
+			Keys: bson.D{
+				{Key: "user_id", Value: 1},
+			},
+			Options: options.Index().SetName("idx_session_user"),
+		},
+		// TTL index for automatic cleanup
+		{
+			Keys: bson.D{
+				{Key: "expires_at", Value: 1},
+			},
+			Options: options.Index().SetExpireAfterSeconds(0).SetName("idx_session_ttl"),
+		},
+		// Active sessions query (who's online)
+		{
+			Keys: bson.D{
+				{Key: "logout_at", Value: 1},
+				{Key: "last_activity", Value: -1},
+			},
+			Options: options.Index().SetName("idx_session_active"),
+		},
+	})
+}
+
+func ensureActivityEvents(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("activity_events")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Activity by session (for session detail view)
+		{
+			Keys: bson.D{
+				{Key: "session_id", Value: 1},
+				{Key: "timestamp", Value: 1},
+			},
+			Options: options.Index().SetName("idx_activity_session"),
+		},
+		// Activity by user (for user activity history)
+		{
+			Keys: bson.D{
+				{Key: "user_id", Value: 1},
+				{Key: "timestamp", Value: -1},
+			},
+			Options: options.Index().SetName("idx_activity_user"),
 		},
 	})
 }

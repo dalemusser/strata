@@ -76,6 +76,9 @@ func startTaskRunner(db *mongo.Database, logger *zap.Logger) {
 	taskRunner.Register(tasks.OAuthStateCleanupJob(db, logger))
 	taskRunner.Register(tasks.EmailVerificationCleanupJob(db, logger))
 
+	// Close sessions inactive for 30 minutes (checked every 5 minutes)
+	taskRunner.Register(tasks.InactiveSessionCleanupJob(db, logger, 30*time.Minute))
+
 	// Start running jobs
 	taskRunner.Start()
 }

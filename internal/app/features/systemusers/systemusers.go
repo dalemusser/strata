@@ -21,6 +21,7 @@ import (
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/dalemusser/waffle/pantry/text"
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/csrf"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -222,17 +223,21 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 // ManageModalVM is the view model for the manage modal.
 type ManageModalVM struct {
-	ID       string
-	FullName string
-	LoginID  string
-	Role     string
-	Auth     string
-	Status   string
-	BackURL  string
+	ID        string
+	FullName  string
+	LoginID   string
+	Role      string
+	Auth      string
+	Status    string
+	BackURL   string
+	CSRFToken string
+	IsSelf    bool
 }
 
 // manageModal renders the manage user modal.
 func (h *Handler) manageModal(w http.ResponseWriter, r *http.Request) {
+	actor, _ := auth.CurrentUser(r)
+
 	id := chi.URLParam(r, "id")
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
@@ -252,13 +257,15 @@ func (h *Handler) manageModal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vm := ManageModalVM{
-		ID:       id,
-		FullName: user.FullName,
-		LoginID:  loginID,
-		Role:     normalize.Role(user.Role),
-		Auth:     formatAuthMethod(user.AuthMethod),
-		Status:   normalize.Status(user.Status),
-		BackURL:  r.URL.Query().Get("return"),
+		ID:        id,
+		FullName:  user.FullName,
+		LoginID:   loginID,
+		Role:      normalize.Role(user.Role),
+		Auth:      formatAuthMethod(user.AuthMethod),
+		Status:    normalize.Status(user.Status),
+		BackURL:   r.URL.Query().Get("return"),
+		CSRFToken: csrf.Token(r),
+		IsSelf:    actor.UserID() == objID,
 	}
 
 	templates.RenderSnippet(w, "systemusers/manage_modal", vm)

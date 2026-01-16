@@ -30,6 +30,9 @@ var appConfigKeys = []config.AppKey{
 	{Name: "session_domain", Default: "", Desc: "Session cookie domain (blank means current host)"},
 	{Name: "csrf_key", Default: "dev-only-csrf-key-please-change-0123456789", Desc: "CSRF token signing key (32+ chars in production)"},
 
+	// API key configuration (for external API consumers using Bearer token auth)
+	{Name: "api_key", Default: "", Desc: "API key for external API access (leave empty to disable API key auth)"},
+
 	// File storage configuration
 	{Name: "storage_type", Default: "local", Desc: "Storage backend: 'local' or 's3'"},
 	{Name: "storage_local_path", Default: "./uploads", Desc: "Local storage path for uploaded files"},
@@ -98,6 +101,7 @@ func LoadConfig(logger *zap.Logger) (*config.CoreConfig, AppConfig, error) {
 		SessionName:      appValues.String("session_name"),
 		SessionDomain:    appValues.String("session_domain"),
 		CSRFKey:          appValues.String("csrf_key"),
+		APIKey:           appValues.String("api_key"),
 
 		// File storage
 		StorageType:      appValues.String("storage_type"),

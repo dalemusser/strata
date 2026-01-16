@@ -22,6 +22,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/csrf"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
@@ -164,11 +165,12 @@ type NewVM struct {
 
 // ManageModalVM is the view model for the manage modal.
 type ManageModalVM struct {
-	ID      string
-	Email   string
-	Role    string
-	Expired bool
-	BackURL string
+	ID        string
+	Email     string
+	Role      string
+	Expired   bool
+	BackURL   string
+	CSRFToken string
 }
 
 // manageModal displays the manage modal for an invitation.
@@ -192,14 +194,15 @@ func (h *Handler) manageModal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vm := ManageModalVM{
-		ID:      id,
-		Email:   inv.Email,
-		Role:    inv.Role,
-		Expired: inv.ExpiresAt.Before(time.Now()),
-		BackURL: backURL,
+		ID:        id,
+		Email:     inv.Email,
+		Role:      inv.Role,
+		Expired:   inv.ExpiresAt.Before(time.Now()),
+		BackURL:   backURL,
+		CSRFToken: csrf.Token(r),
 	}
 
-	templates.Render(w, r, "invitations/manage_modal", vm)
+	templates.RenderSnippet(w, "invitations/manage_modal", vm)
 }
 
 // showNew displays the new invitation form.
@@ -597,15 +600,15 @@ func (h *Handler) handleAccept(w http.ResponseWriter, r *http.Request) {
 
 // createTrackedSession creates a session in both the cookie and MongoDB for tracking.
 func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
-	// First create the cookie session
-	if err := h.sessionMgr.CreateSession(w, r, userID, role); err != nil {
+	// Generate token first so we can use it for both cookie and MongoDB tracking
+	token, err := auth.GenerateSessionToken()
+	if err != nil {
 		return err
 	}
 
-	// Get the session token that was just created
-	token := h.sessionMgr.GetSessionToken(r)
-	if token == "" {
-		return nil // No tracking if no token
+	// Create the cookie session with the generated token
+	if err := h.sessionMgr.CreateSession(w, r, userID, role, token); err != nil {
+		return err
 	}
 
 	// Store session in MongoDB for tracking
@@ -615,13 +618,14 @@ func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, u
 		UserID:       userID,
 		IPAddress:    network.GetClientIP(r),
 		UserAgent:    r.UserAgent(),
-		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
+		LoginAt:      now,
 		LastActivity: now,
+		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
 	}
 
+	// Best effort - don't fail login if tracking fails
 	if err := h.sessionsStore.Create(r.Context(), session); err != nil {
 		h.logger.Warn("failed to track session in MongoDB", zap.Error(err))
-		// Don't fail - the cookie session is still valid
 	}
 
 	return nil

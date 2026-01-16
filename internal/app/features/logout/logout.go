@@ -4,6 +4,7 @@ package logout
 import (
 	"net/http"
 
+	"github.com/dalemusser/strata/internal/app/store/activity"
 	"github.com/dalemusser/strata/internal/app/store/sessions"
 	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
@@ -16,6 +17,7 @@ type Handler struct {
 	sessionMgr    *auth.SessionManager
 	auditLogger   *auditlog.Logger
 	sessionsStore *sessions.Store
+	activityStore *activity.Store
 	logger        *zap.Logger
 }
 
@@ -24,12 +26,14 @@ func NewHandler(
 	sessionMgr *auth.SessionManager,
 	auditLogger *auditlog.Logger,
 	sessionsStore *sessions.Store,
+	activityStore *activity.Store,
 	logger *zap.Logger,
 ) *Handler {
 	return &Handler{
 		sessionMgr:    sessionMgr,
 		auditLogger:   auditLogger,
 		sessionsStore: sessionsStore,
+		activityStore: activityStore,
 		logger:        logger,
 	}
 }
@@ -48,10 +52,18 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if user, ok := auth.CurrentUser(r); ok {
 		h.auditLogger.Logout(r.Context(), r, user.ID)
 
-		// Delete session from MongoDB tracking
+		// Close session in MongoDB tracking (preserves for audit, records duration)
 		if token := user.SessionToken(); token != "" {
-			if err := h.sessionsStore.Delete(r.Context(), token); err != nil {
-				h.logger.Warn("failed to delete session from store", zap.Error(err))
+			// Get session ID before closing for activity recording
+			sess, _ := h.sessionsStore.GetByToken(r.Context(), token)
+
+			if err := h.sessionsStore.Close(r.Context(), token, sessions.EndReasonLogout); err != nil {
+				h.logger.Warn("failed to close session in store", zap.Error(err))
+			} else if h.activityStore != nil && sess != nil {
+				// Record logout activity event
+				if err := h.activityStore.RecordLogout(r.Context(), user.UserID(), sess.ID); err != nil {
+					h.logger.Warn("failed to record logout activity", zap.Error(err))
+				}
 			}
 		}
 	}

@@ -140,7 +140,7 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		if err == mongo.ErrNoDocuments {
 			// User doesn't exist - redirect to login with error
 			// (Google auth requires existing user for security)
-			h.auditLogger.LogAuthEvent(r, nil, "login_failed_user_not_found", false, "google user not found")
+			h.auditLogger.LoginFailedUserNotFound(r.Context(), r, userInfo.Email)
 			http.Redirect(w, r, "/login?error=user_not_found", http.StatusSeeOther)
 			return
 		}
@@ -214,15 +214,15 @@ func generateState() (string, error) {
 
 // createTrackedSession creates a session in both the cookie and MongoDB for tracking.
 func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, userID primitive.ObjectID, role string) error {
-	// First create the cookie session
-	if err := h.sessionMgr.CreateSession(w, r, userID, role); err != nil {
+	// Generate token first so we can use it for both cookie and MongoDB tracking
+	token, err := auth.GenerateSessionToken()
+	if err != nil {
 		return err
 	}
 
-	// Get the session token that was just created
-	token := h.sessionMgr.GetSessionToken(r)
-	if token == "" {
-		return nil // No tracking if no token
+	// Create the cookie session with the generated token
+	if err := h.sessionMgr.CreateSession(w, r, userID, role, token); err != nil {
+		return err
 	}
 
 	// Store session in MongoDB for tracking
@@ -232,8 +232,9 @@ func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, u
 		UserID:       userID,
 		IPAddress:    getClientIP(r),
 		UserAgent:    r.UserAgent(),
-		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
+		LoginAt:      now,
 		LastActivity: now,
+		ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
 	}
 
 	// Best effort - don't fail login if tracking fails
