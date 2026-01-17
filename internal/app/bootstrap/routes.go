@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	activityfeature "github.com/dalemusser/strata/internal/app/features/activity"
 	announcementsfeature "github.com/dalemusser/strata/internal/app/features/announcements"
 	auditlogfeature "github.com/dalemusser/strata/internal/app/features/auditlog"
 	authgooglefeature "github.com/dalemusser/strata/internal/app/features/authgoogle"
@@ -20,6 +21,7 @@ import (
 	pagesfeature "github.com/dalemusser/strata/internal/app/features/pages"
 	profilefeature "github.com/dalemusser/strata/internal/app/features/profile"
 	settingsfeature "github.com/dalemusser/strata/internal/app/features/settings"
+	statusfeature "github.com/dalemusser/strata/internal/app/features/status"
 	systemusersfeature "github.com/dalemusser/strata/internal/app/features/systemusers"
 	appresources "github.com/dalemusser/strata/internal/app/resources"
 	"github.com/dalemusser/strata/internal/app/store/activity"
@@ -319,6 +321,59 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 		sr.Use(sessionMgr.RequireRole("admin"))
 		settingsHandler.MountRoutes(sr)
 	})
+
+	// System status page (admin only)
+	statusAppCfg := statusfeature.AppConfig{
+		MongoURI:           appCfg.MongoURI,
+		MongoDatabase:      appCfg.MongoDatabase,
+		MongoMaxPoolSize:   appCfg.MongoMaxPoolSize,
+		MongoMinPoolSize:   appCfg.MongoMinPoolSize,
+		SessionKey:         appCfg.SessionKey,
+		SessionName:        appCfg.SessionName,
+		SessionDomain:      appCfg.SessionDomain,
+		CSRFKey:            appCfg.CSRFKey,
+		APIKey:             appCfg.APIKey,
+		StorageType:        appCfg.StorageType,
+		StorageLocalPath:   appCfg.StorageLocalPath,
+		StorageLocalURL:    appCfg.StorageLocalURL,
+		StorageS3Region:    appCfg.StorageS3Region,
+		StorageS3Bucket:    appCfg.StorageS3Bucket,
+		StorageS3Prefix:    appCfg.StorageS3Prefix,
+		StorageCFURL:       appCfg.StorageCFURL,
+		StorageCFKeyPairID: appCfg.StorageCFKeyPairID,
+		StorageCFKeyPath:   appCfg.StorageCFKeyPath,
+		MailSMTPHost:       appCfg.MailSMTPHost,
+		MailSMTPPort:       appCfg.MailSMTPPort,
+		MailSMTPUser:       appCfg.MailSMTPUser,
+		MailSMTPPass:       appCfg.MailSMTPPass,
+		MailFrom:           appCfg.MailFrom,
+		MailFromName:       appCfg.MailFromName,
+		BaseURL:            appCfg.BaseURL,
+		EmailVerifyExpiry:  appCfg.EmailVerifyExpiry,
+		AuditLogAuth:       appCfg.AuditLogAuth,
+		AuditLogAdmin:      appCfg.AuditLogAdmin,
+		GoogleClientID:     appCfg.GoogleClientID,
+		GoogleClientSecret: appCfg.GoogleClientSecret,
+		SeedAdminEmail:     appCfg.SeedAdminEmail,
+		SeedAdminName:      appCfg.SeedAdminName,
+	}
+	statusHandler := statusfeature.NewHandler(deps.MongoClient, appCfg.BaseURL, coreCfg, statusAppCfg, logger)
+	r.Mount("/admin/status", statusfeature.Routes(statusHandler, sessionMgr))
+
+	// Activity dashboard (admin only)
+	activityHandler := activityfeature.NewHandler(
+		deps.MongoDatabase,
+		sessionsStore,
+		activityStore,
+		userstore.New(deps.MongoDatabase),
+		sessionMgr,
+		errLog,
+		logger,
+	)
+	r.Mount("/activity", activityfeature.Routes(activityHandler, sessionMgr))
+
+	// 404 catch-all for unmatched routes
+	r.NotFound(errorsHandler.NotFound)
 
 	return r, nil
 }

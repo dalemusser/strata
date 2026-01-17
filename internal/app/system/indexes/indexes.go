@@ -49,6 +49,9 @@ func EnsureAll(ctx context.Context, db *mongo.Database) error {
 	if err := ensureActivityEvents(ctx, db); err != nil {
 		problems = append(problems, "activity_events: "+err.Error())
 	}
+	if err := ensureLoginRecords(ctx, db); err != nil {
+		problems = append(problems, "login_records: "+err.Error())
+	}
 
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
@@ -449,6 +452,27 @@ func ensureActivityEvents(ctx context.Context, db *mongo.Database) error {
 				{Key: "timestamp", Value: -1},
 			},
 			Options: options.Index().SetName("idx_activity_user"),
+		},
+	})
+}
+
+func ensureLoginRecords(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("login_records")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Login history by user (for user login history)
+		{
+			Keys: bson.D{
+				{Key: "user_id", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_logins_user_created"),
+		},
+		// Login history by time (for date range queries)
+		{
+			Keys: bson.D{
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_logins_created"),
 		},
 	})
 }

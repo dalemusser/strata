@@ -1,0 +1,102 @@
+{{ define "activity_user_detail" }}
+  {{ template "layout" . }}
+{{ end }}
+
+{{ define "content" }}
+<div class="flex items-center gap-3 mb-4">
+  <a href="/activity" class="text-sm px-3 py-1 border dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700">
+    &larr; Dashboard
+  </a>
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Activity History</h1>
+</div>
+
+<!-- User Info -->
+<div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-6">
+  <table class="w-full">
+    <tr>
+      <td class="align-top pr-8">
+        <h2 class="text-xl font-bold text-gray-900 dark:text-gray-100">{{ .UserName }}</h2>
+        {{ if .LoginID }}
+        <p class="text-sm text-gray-500 dark:text-gray-400">{{ .LoginID }}</p>
+        {{ end }}
+      </td>
+      <td class="align-top pr-8">
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Email</p>
+        <p class="text-sm text-gray-700 dark:text-gray-300">{{ if .Email }}{{ .Email }}{{ else }}--{{ end }}</p>
+      </td>
+      <td class="align-top">
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Role</p>
+        <p class="text-sm text-gray-700 dark:text-gray-300">{{ if .UserRole }}{{ .UserRole }}{{ else }}--{{ end }}</p>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<!-- Session History Header with Refresh Controls -->
+<div class="flex items-center justify-between mb-4">
+  <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Session History</h3>
+  <div class="flex items-center gap-2">
+    <button id="refresh-btn"
+            type="button"
+            class="text-sm px-2 py-1 border dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+            title="Refresh now">
+      Refresh
+    </button>
+    <span id="countdown" class="text-xs text-gray-500 dark:text-gray-400 w-8 text-center">30s</span>
+  </div>
+</div>
+
+<!-- Auto-refreshing content -->
+<div id="user-detail-content">
+  {{ template "activity_user_detail_content" . }}
+</div>
+
+<script>
+(function() {
+  var countdown = 30;
+  var countdownEl = document.getElementById('countdown');
+  var refreshBtn = document.getElementById('refresh-btn');
+  var countdownInterval = null;
+
+  function updateCountdown() {
+    if (countdownEl) {
+      countdownEl.textContent = countdown + 's';
+    }
+  }
+
+  function startCountdown() {
+    countdown = 30;
+    updateCountdown();
+    if (countdownInterval) clearInterval(countdownInterval);
+    countdownInterval = setInterval(function() {
+      countdown--;
+      if (countdown < 0) countdown = 30;
+      updateCountdown();
+    }, 1000);
+  }
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', function() {
+      var content = document.querySelector('#user-detail-content > div[hx-get]');
+      if (content) {
+        var url = content.getAttribute('hx-get');
+        if (url) {
+          htmx.ajax('GET', url, {target: '#user-detail-content', swap: 'innerHTML'});
+        }
+      }
+      countdown = 30;
+      updateCountdown();
+    });
+  }
+
+  document.body.addEventListener('htmx:afterSwap', function(evt) {
+    if (evt.detail.target && evt.detail.target.id === 'user-detail-content') {
+      countdown = 30;
+      updateCountdown();
+    }
+  });
+
+  startCountdown();
+})();
+</script>
+{{ end }}
