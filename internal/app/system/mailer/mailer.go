@@ -45,6 +45,12 @@ func New(cfg Config, log *zap.Logger) *Mailer {
 	}
 }
 
+// FromName returns the configured sender display name.
+// This can be used as the application name in email templates.
+func (m *Mailer) FromName() string {
+	return m.fromName
+}
+
 // Email represents an email to be sent.
 type Email struct {
 	To       string

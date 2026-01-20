@@ -30,6 +30,13 @@ type SiteSettings struct {
 	// If empty/nil, all methods from AllAuthMethods are enabled (default).
 	EnabledAuthMethods []string `bson:"enabled_auth_methods,omitempty" json:"enabled_auth_methods,omitempty"`
 
+	// Email Notification Settings
+	// All disabled by default (opt-in)
+	NotifyUserOnCreate  bool `bson:"notify_user_on_create" json:"notify_user_on_create"`   // Send welcome email when admin creates user
+	NotifyUserOnDisable bool `bson:"notify_user_on_disable" json:"notify_user_on_disable"` // Send notification when account disabled
+	NotifyUserOnEnable  bool `bson:"notify_user_on_enable" json:"notify_user_on_enable"`   // Send notification when account enabled
+	NotifyUserOnWelcome bool `bson:"notify_user_on_welcome" json:"notify_user_on_welcome"` // Send welcome email after invitation accepted
+
 	// Audit fields
 	UpdatedAt     *time.Time          `bson:"updated_at,omitempty" json:"updated_at,omitempty"`
 	UpdatedByID   *primitive.ObjectID `bson:"updated_by_id,omitempty" json:"updated_by_id,omitempty"`

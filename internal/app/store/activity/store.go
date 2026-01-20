@@ -16,10 +16,11 @@ import (
 )
 
 // Event types for activity tracking.
+// Note: Login/logout events are NOT tracked here - they are captured in the sessions store
+// (login_at, logout_at fields) to avoid redundancy. The Activity History display creates
+// synthetic login/logout events from session data.
 const (
 	EventPageView = "page_view" // User viewed a page
-	EventLogin    = "login"     // User logged in
-	EventLogout   = "logout"    // User logged out
 )
 
 // Event represents a user activity event.
@@ -91,35 +92,6 @@ func (s *Store) RecordPageView(ctx context.Context, userID, sessionID primitive.
 	return err
 }
 
-// RecordLogin records when a user logs in.
-func (s *Store) RecordLogin(ctx context.Context, userID, sessionID primitive.ObjectID, ip, userAgent string) error {
-	event := Event{
-		ID:        primitive.NewObjectID(),
-		UserID:    userID,
-		SessionID: sessionID,
-		Timestamp: time.Now().UTC(),
-		EventType: EventLogin,
-		Details: map[string]any{
-			"ip":         ip,
-			"user_agent": userAgent,
-		},
-	}
-	_, err := s.c.InsertOne(ctx, event)
-	return err
-}
-
-// RecordLogout records when a user logs out.
-func (s *Store) RecordLogout(ctx context.Context, userID, sessionID primitive.ObjectID) error {
-	event := Event{
-		ID:        primitive.NewObjectID(),
-		UserID:    userID,
-		SessionID: sessionID,
-		Timestamp: time.Now().UTC(),
-		EventType: EventLogout,
-	}
-	_, err := s.c.InsertOne(ctx, event)
-	return err
-}
 
 // GetBySession retrieves all events for a session.
 func (s *Store) GetBySession(ctx context.Context, sessionID primitive.ObjectID) ([]Event, error) {

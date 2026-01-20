@@ -33,12 +33,13 @@ type Session struct {
 	Data      map[string]any     `bson:"data,omitempty"`
 
 	// Activity tracking
-	CurrentPage  string     `bson:"current_page,omitempty"`  // Current page user is viewing
-	LoginAt      time.Time  `bson:"login_at"`                // When session started
-	LogoutAt     *time.Time `bson:"logout_at,omitempty"`     // When session ended (nil if active)
-	LastActivity time.Time  `bson:"last_activity"`           // Last heartbeat/activity
-	EndReason    string     `bson:"end_reason,omitempty"`    // "logout", "expired", "inactive"
-	DurationSecs int64      `bson:"duration_secs,omitempty"` // Computed on close
+	CurrentPage      string     `bson:"current_page,omitempty"`       // Current page user is viewing
+	LoginAt          time.Time  `bson:"login_at"`                     // When session started
+	LogoutAt         *time.Time `bson:"logout_at,omitempty"`          // When session ended (nil if active)
+	LastActivity     time.Time  `bson:"last_activity"`                // Last heartbeat (tab open)
+	LastUserActivity time.Time  `bson:"last_user_activity,omitempty"` // Last real user interaction (clicks, keys)
+	EndReason        string     `bson:"end_reason,omitempty"`         // "logout", "expired", "inactive"
+	DurationSecs     int64      `bson:"duration_secs,omitempty"`      // Computed on close
 
 	// TTL expiration
 	ExpiresAt time.Time `bson:"expires_at"`
@@ -101,6 +102,9 @@ func (s *Store) Create(ctx context.Context, session Session) error {
 	}
 	if session.LastActivity.IsZero() {
 		session.LastActivity = now
+	}
+	if session.LastUserActivity.IsZero() {
+		session.LastUserActivity = now
 	}
 	_, err := s.c.InsertOne(ctx, session)
 	return err
@@ -183,6 +187,21 @@ func (s *Store) UpdateActivity(ctx context.Context, token string, ip string, use
 	}
 
 	_, err := s.c.UpdateOne(ctx, bson.M{"token": token}, update)
+	return err
+}
+
+// UpdateUserActivity updates the last_user_activity timestamp for a session.
+// This is called only when the user has actually interacted (clicks, keystrokes, scrolling).
+// Unlike LastActivity (updated by every heartbeat), this tracks real user engagement.
+func (s *Store) UpdateUserActivity(ctx context.Context, token string) error {
+	now := time.Now()
+	_, err := s.c.UpdateOne(ctx,
+		bson.M{"token": token, "logout_at": nil},
+		bson.M{"$set": bson.M{
+			"last_user_activity": now,
+			"updated_at":         now,
+		}},
+	)
 	return err
 }
 

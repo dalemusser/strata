@@ -11,6 +11,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/store/sessions"
 	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/go-chi/chi/v5"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
 
@@ -20,6 +21,11 @@ type Handler struct {
 	Activity   *activity.Store
 	SessionMgr *auth.SessionManager
 	Log        *zap.Logger
+
+	// Idle logout configuration
+	IdleLogoutEnabled bool
+	IdleLogoutTimeout time.Duration
+	IdleLogoutWarning time.Duration
 }
 
 // NewHandler creates a new heartbeat handler.
@@ -32,6 +38,13 @@ func NewHandler(sessStore *sessions.Store, activityStore *activity.Store, sessio
 	}
 }
 
+// SetIdleLogoutConfig configures idle logout settings.
+func (h *Handler) SetIdleLogoutConfig(enabled bool, timeout, warning time.Duration) {
+	h.IdleLogoutEnabled = enabled
+	h.IdleLogoutTimeout = timeout
+	h.IdleLogoutWarning = warning
+}
+
 // Routes returns a chi.Router with heartbeat routes mounted.
 func Routes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 	r := chi.NewRouter()
@@ -42,7 +55,14 @@ func Routes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 
 // heartbeatRequest is the JSON body for the heartbeat endpoint.
 type heartbeatRequest struct {
-	Page string `json:"page"`
+	Page            string `json:"page"`
+	HadUserActivity bool   `json:"had_user_activity"` // True if user interacted since last heartbeat
+}
+
+// heartbeatResponse is returned when idle warning or logout is needed.
+type heartbeatResponse struct {
+	IdleWarning      bool `json:"idle_warning,omitempty"`
+	SecondsRemaining int  `json:"seconds_remaining,omitempty"`
 }
 
 // ServeHeartbeat handles POST /api/heartbeat.
@@ -90,8 +110,16 @@ func (h *Handler) ServeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record page view event if page changed (but not on first heartbeat when PreviousPage is empty)
-	if result.Updated && req.Page != "" && result.PreviousPage != "" && req.Page != result.PreviousPage && h.Activity != nil {
+	// Update last_user_activity if user was actually interacting
+	if result.Updated && req.HadUserActivity {
+		if err := h.Sessions.UpdateUserActivity(ctx, sessionToken); err != nil {
+			h.Log.Warn("failed to update user activity",
+				zap.Error(err))
+		}
+	}
+
+	// Record page view event if page changed
+	if result.Updated && req.Page != "" && req.Page != result.PreviousPage && h.Activity != nil {
 		userOID := user.UserID()
 		// Look up session to get its ID for activity recording
 		sessionDoc, _ := h.Sessions.GetByToken(ctx, sessionToken)
@@ -100,6 +128,44 @@ func (h *Handler) ServeHeartbeat(w http.ResponseWriter, r *http.Request) {
 				h.Log.Warn("failed to record page view",
 					zap.Error(err),
 					zap.String("page", req.Page))
+			}
+		}
+	}
+
+	// Check idle timeout if enabled
+	if h.IdleLogoutEnabled && result.Updated {
+		// Use the session we already have or refresh it
+		sess := dbSession
+		if sess == nil {
+			sess, _ = h.Sessions.GetByToken(ctx, sessionToken)
+		}
+		if sess != nil {
+			// Use last_user_activity for idle check, fall back to last_activity for legacy sessions
+			lastUserActivity := sess.LastUserActivity
+			if lastUserActivity.IsZero() {
+				lastUserActivity = sess.LastActivity
+			}
+
+			idleTime := time.Since(lastUserActivity)
+
+			// If past timeout, force logout
+			if idleTime > h.IdleLogoutTimeout {
+				h.Log.Info("idle timeout exceeded, forcing logout",
+					zap.String("user_id", user.ID),
+					zap.Duration("idle_time", idleTime))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+
+			// If within warning window, send warning
+			if idleTime > h.IdleLogoutTimeout-h.IdleLogoutWarning {
+				remaining := h.IdleLogoutTimeout - idleTime
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(heartbeatResponse{
+					IdleWarning:      true,
+					SecondsRemaining: int(remaining.Seconds()),
+				})
+				return
 			}
 		}
 	}
@@ -124,13 +190,16 @@ func (h *Handler) ServeHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 		// Create new activity session
 		now := time.Now()
+		sessionID := primitive.NewObjectID()
 		newSess := sessions.Session{
+			ID:           sessionID,
 			Token:        newToken,
 			UserID:       userOID,
 			IPAddress:    clientIP(r),
 			UserAgent:    r.UserAgent(),
 			LoginAt:      now,
 			LastActivity: now,
+			CurrentPage:  req.Page,
 			ExpiresAt:    now.Add(24 * 30 * time.Hour), // 30 days
 		}
 		if err := h.Sessions.Create(ctx, newSess); err != nil {
@@ -139,6 +208,15 @@ func (h *Handler) ServeHeartbeat(w http.ResponseWriter, r *http.Request) {
 				zap.String("user_id", user.ID))
 			w.WriteHeader(http.StatusOK)
 			return
+		}
+
+		// Record page view for the initial page after session recreation
+		if req.Page != "" && h.Activity != nil {
+			if err := h.Activity.RecordPageView(ctx, userOID, sessionID, req.Page); err != nil {
+				h.Log.Warn("failed to record page view on session recreation",
+					zap.Error(err),
+					zap.String("page", req.Page))
+			}
 		}
 
 		// Update cookie with new session token via session manager

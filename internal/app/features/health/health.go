@@ -34,12 +34,23 @@ type Response struct {
 }
 
 // Routes returns a chi.Router with health check routes mounted.
+// Provides /health (full check), /health/ready, and /health/live.
 func Routes(h *Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", h.Check)
 	r.Get("/ready", h.Ready)
 	r.Get("/live", h.Live)
 	return r
+}
+
+// MountRootEndpoints adds /ready and /livez endpoints directly on the root router.
+// This is the standard convention for Kubernetes probes:
+//   - /ready (or /readyz) - readiness probe
+//   - /livez - liveness probe
+func MountRootEndpoints(r chi.Router, h *Handler) {
+	r.Get("/ready", h.Ready)
+	r.Get("/readyz", h.Ready)
+	r.Get("/livez", h.Live)
 }
 
 // Check performs a full health check including database connectivity.

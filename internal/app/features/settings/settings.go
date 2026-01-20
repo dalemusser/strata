@@ -191,13 +191,23 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		logoName = header.Filename
 	}
 
+	// Parse email notification settings (checkboxes)
+	notifyUserOnCreate := r.FormValue("notify_user_on_create") == "on"
+	notifyUserOnDisable := r.FormValue("notify_user_on_disable") == "on"
+	notifyUserOnEnable := r.FormValue("notify_user_on_enable") == "on"
+	notifyUserOnWelcome := r.FormValue("notify_user_on_welcome") == "on"
+
 	input := settingsstore.UpdateInput{
-		SiteName:       siteName,
-		LandingTitle:   landingTitle,
-		LandingContent: landingContent,
-		FooterHTML:     footerHTML,
-		LogoPath:       logoPath,
-		LogoName:       logoName,
+		SiteName:            siteName,
+		LandingTitle:        landingTitle,
+		LandingContent:      landingContent,
+		FooterHTML:          footerHTML,
+		LogoPath:            logoPath,
+		LogoName:            logoName,
+		NotifyUserOnCreate:  notifyUserOnCreate,
+		NotifyUserOnDisable: notifyUserOnDisable,
+		NotifyUserOnEnable:  notifyUserOnEnable,
+		NotifyUserOnWelcome: notifyUserOnWelcome,
 	}
 
 	if err := h.settingsStore.Upsert(ctx, input); err != nil {

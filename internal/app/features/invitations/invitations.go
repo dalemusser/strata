@@ -14,6 +14,7 @@ import (
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
 	"github.com/dalemusser/strata/internal/app/store/invitation"
 	"github.com/dalemusser/strata/internal/app/store/sessions"
+	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
 	userstore "github.com/dalemusser/strata/internal/app/store/users"
 	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
@@ -32,6 +33,7 @@ import (
 type Handler struct {
 	invitationStore *invitation.Store
 	userStore       *userstore.Store
+	settingsStore   *settingsstore.Store
 	sessionMgr      *auth.SessionManager
 	sessionsStore   *sessions.Store
 	errLog          *errorsfeature.ErrorLogger
@@ -60,6 +62,7 @@ func NewHandler(
 	return &Handler{
 		invitationStore: invitation.New(db, inviteExpiry),
 		userStore:       userstore.New(db),
+		settingsStore:   settingsstore.New(db),
 		sessionMgr:      sessionMgr,
 		sessionsStore:   sessionsStore,
 		errLog:          errLog,
@@ -583,6 +586,34 @@ func (h *Handler) handleAccept(w http.ResponseWriter, r *http.Request) {
 	h.invitationStore.MarkUsed(r.Context(), inv.ID)
 
 	h.auditLogger.LogAuthEvent(r, &user.ID, "user_registered_via_invitation", true, inv.Email)
+
+	// Send welcome email if enabled
+	if h.mailer != nil {
+		settings, _ := h.settingsStore.Get(r.Context())
+		if settings != nil && settings.NotifyUserOnWelcome {
+			userEmail := inv.Email
+			userName := fullName
+			userRole := inv.Role
+			siteName := settings.SiteName
+			if siteName == "" {
+				siteName = "Strata"
+			}
+			go func() {
+				text, html := mailer.WelcomeEmail(mailer.WelcomeEmailData{
+					AppName:  siteName,
+					UserName: userName,
+					LoginURL: h.baseURL + "/login",
+					Role:     userRole,
+				})
+				_ = h.mailer.Send(mailer.Email{
+					To:       userEmail,
+					Subject:  "Welcome to " + siteName + "!",
+					TextBody: text,
+					HTMLBody: html,
+				})
+			}()
+		}
+	}
 
 	// Log the user in immediately - they proved email ownership by clicking the invitation link
 	if err := h.createTrackedSession(w, r, user.ID, user.Role); err != nil {

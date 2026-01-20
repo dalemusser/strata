@@ -12,10 +12,12 @@ import (
 	"strings"
 
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
+	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
 	userstore "github.com/dalemusser/strata/internal/app/store/users"
 	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/auditlog"
 	"github.com/dalemusser/strata/internal/app/system/authutil"
+	"github.com/dalemusser/strata/internal/app/system/mailer"
 	"github.com/dalemusser/strata/internal/app/system/normalize"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/waffle/pantry/templates"
@@ -33,24 +35,29 @@ const pageSize = 20
 
 // Handler provides system users management handlers.
 type Handler struct {
-	userStore   *userstore.Store
-	errLog      *errorsfeature.ErrorLogger
-	auditLogger *auditlog.Logger
-	logger      *zap.Logger
+	userStore     *userstore.Store
+	settingsStore *settingsstore.Store
+	mailer        *mailer.Mailer
+	errLog        *errorsfeature.ErrorLogger
+	auditLogger   *auditlog.Logger
+	logger        *zap.Logger
 }
 
 // NewHandler creates a new system users Handler.
 func NewHandler(
 	db *mongo.Database,
+	m *mailer.Mailer,
 	errLog *errorsfeature.ErrorLogger,
 	auditLogger *auditlog.Logger,
 	logger *zap.Logger,
 ) *Handler {
 	return &Handler{
-		userStore:   userstore.New(db),
-		errLog:      errLog,
-		auditLogger: auditLogger,
-		logger:      logger,
+		userStore:     userstore.New(db),
+		settingsStore: settingsstore.New(db),
+		mailer:        m,
+		errLog:        errLog,
+		auditLogger:   auditLogger,
+		logger:        logger,
 	}
 }
 
@@ -378,6 +385,33 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	actorID := actor.UserID()
 	h.auditLogger.LogAdminEvent(r, &actorID, &user.ID, "user_created", nil)
 
+	// Send welcome email if enabled and user has email
+	if h.mailer != nil && user.Email != nil && *user.Email != "" {
+		settings, _ := h.settingsStore.Get(r.Context())
+		if settings != nil && settings.NotifyUserOnCreate {
+			userEmail := *user.Email
+			userName := user.FullName
+			siteName := settings.SiteName
+			if siteName == "" {
+				siteName = "Strata"
+			}
+			go func() {
+				text, html := mailer.WelcomeEmail(mailer.WelcomeEmailData{
+					AppName:  siteName,
+					UserName: userName,
+					LoginURL: "/login",
+					Role:     user.Role,
+				})
+				_ = h.mailer.Send(mailer.Email{
+					To:       userEmail,
+					Subject:  "Welcome to " + siteName,
+					TextBody: text,
+					HTMLBody: html,
+				})
+			}()
+		}
+	}
+
 	http.Redirect(w, r, returnURL, http.StatusSeeOther)
 }
 
@@ -634,6 +668,14 @@ func (h *Handler) disable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get user before update to get their email and name
+	user, err := h.userStore.GetByID(r.Context(), objID)
+	if err != nil {
+		h.errLog.Log(r, "failed to get user for disable", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
 	status := "disabled"
 	if err := h.userStore.UpdateFromInput(r.Context(), objID, userstore.UpdateInput{
 		Status: &status,
@@ -645,6 +687,31 @@ func (h *Handler) disable(w http.ResponseWriter, r *http.Request) {
 
 	actorID := actor.UserID()
 	h.auditLogger.LogAdminEvent(r, &actorID, &objID, "user_disabled", nil)
+
+	// Send disabled notification email if enabled
+	if h.mailer != nil && user.Email != nil && *user.Email != "" {
+		settings, _ := h.settingsStore.Get(r.Context())
+		if settings != nil && settings.NotifyUserOnDisable {
+			userEmail := *user.Email
+			userName := user.FullName
+			siteName := settings.SiteName
+			if siteName == "" {
+				siteName = "Strata"
+			}
+			go func() {
+				text, html := mailer.AccountDisabledEmail(mailer.AccountDisabledEmailData{
+					AppName:  siteName,
+					UserName: userName,
+				})
+				_ = h.mailer.Send(mailer.Email{
+					To:       userEmail,
+					Subject:  "Your " + siteName + " account has been disabled",
+					TextBody: text,
+					HTMLBody: html,
+				})
+			}()
+		}
+	}
 
 	http.Redirect(w, r, returnURL, http.StatusSeeOther)
 }
@@ -665,6 +732,14 @@ func (h *Handler) enable(w http.ResponseWriter, r *http.Request) {
 		returnURL = ret
 	}
 
+	// Get user before update to get their email and name
+	user, err := h.userStore.GetByID(r.Context(), objID)
+	if err != nil {
+		h.errLog.Log(r, "failed to get user for enable", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
 	status := "active"
 	if err := h.userStore.UpdateFromInput(r.Context(), objID, userstore.UpdateInput{
 		Status: &status,
@@ -676,6 +751,32 @@ func (h *Handler) enable(w http.ResponseWriter, r *http.Request) {
 
 	actorID := actor.UserID()
 	h.auditLogger.LogAdminEvent(r, &actorID, &objID, "user_enabled", nil)
+
+	// Send enabled notification email if enabled
+	if h.mailer != nil && user.Email != nil && *user.Email != "" {
+		settings, _ := h.settingsStore.Get(r.Context())
+		if settings != nil && settings.NotifyUserOnEnable {
+			userEmail := *user.Email
+			userName := user.FullName
+			siteName := settings.SiteName
+			if siteName == "" {
+				siteName = "Strata"
+			}
+			go func() {
+				text, html := mailer.AccountEnabledEmail(mailer.AccountEnabledEmailData{
+					AppName:  siteName,
+					UserName: userName,
+					LoginURL: "/login",
+				})
+				_ = h.mailer.Send(mailer.Email{
+					To:       userEmail,
+					Subject:  "Your " + siteName + " account has been enabled",
+					TextBody: text,
+					HTMLBody: html,
+				})
+			}()
+		}
+	}
 
 	http.Redirect(w, r, returnURL, http.StatusSeeOther)
 }

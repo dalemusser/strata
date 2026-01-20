@@ -34,9 +34,21 @@ type AppConfig struct {
 	MongoMinPoolSize uint64 // Minimum connections to keep warm (default: 10)
 
 	// Session management configuration
-	SessionKey    string // Secret key for signing session cookies (must be strong in production)
-	SessionName   string // Cookie name for sessions (default: strata-session)
-	SessionDomain string // Cookie domain (blank means current host)
+	SessionKey    string        // Secret key for signing session cookies (must be strong in production)
+	SessionName   string        // Cookie name for sessions (default: strata-session)
+	SessionDomain string        // Cookie domain (blank means current host)
+	SessionMaxAge time.Duration // Maximum session cookie lifetime (default: 24h)
+
+	// Idle logout configuration
+	IdleLogoutEnabled bool          // Enable automatic logout after idle time
+	IdleLogoutTimeout time.Duration // Duration of inactivity before logout (default: 30m)
+	IdleLogoutWarning time.Duration // Time before logout to show warning (default: 5m)
+
+	// Rate limiting configuration
+	RateLimitEnabled       bool          // Enable rate limiting for login attempts (default: true)
+	RateLimitLoginAttempts int           // Max failed login attempts before lockout (default: 5)
+	RateLimitLoginWindow   time.Duration // Time window for counting failed attempts (default: 15m)
+	RateLimitLoginLockout  time.Duration // Lockout duration after exceeding limit (default: 15m)
 
 	// CSRF protection configuration
 	CSRFKey string // Secret key for CSRF token signing (32 bytes, must be strong in production)

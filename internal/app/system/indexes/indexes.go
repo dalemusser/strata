@@ -52,6 +52,15 @@ func EnsureAll(ctx context.Context, db *mongo.Database) error {
 	if err := ensureLoginRecords(ctx, db); err != nil {
 		problems = append(problems, "login_records: "+err.Error())
 	}
+	if err := ensureRateLimits(ctx, db); err != nil {
+		problems = append(problems, "rate_limits: "+err.Error())
+	}
+	if err := ensureFileFolders(ctx, db); err != nil {
+		problems = append(problems, "file_folders: "+err.Error())
+	}
+	if err := ensureFiles(ctx, db); err != nil {
+		problems = append(problems, "files: "+err.Error())
+	}
 
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
@@ -304,13 +313,14 @@ func ensureEmailVerifications(ctx context.Context, db *mongo.Database) error {
 				SetExpireAfterSeconds(0).
 				SetName("idx_emailverify_expires_ttl"),
 		},
-		// Lookup by token (for magic link verification)
+		// Unique token for magic link verification (prevents token reuse)
 		{
 			Keys: bson.D{
 				{Key: "token", Value: 1},
 			},
 			Options: options.Index().
-				SetName("idx_emailverify_token"),
+				SetUnique(true).
+				SetName("uniq_emailverify_token"),
 		},
 		// Lookup by user_id (for code verification and cleanup)
 		{
@@ -473,6 +483,79 @@ func ensureLoginRecords(ctx context.Context, db *mongo.Database) error {
 				{Key: "created_at", Value: -1},
 			},
 			Options: options.Index().SetName("idx_logins_created"),
+		},
+	})
+}
+
+func ensureRateLimits(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("rate_limits")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Unique login_id for fast lookups
+		{
+			Keys: bson.D{
+				{Key: "login_id", Value: 1},
+			},
+			Options: options.Index().SetUnique(true).SetName("idx_ratelimit_login_id"),
+		},
+		// TTL index on last_attempt - automatically clean up old records after 24 hours
+		{
+			Keys: bson.D{
+				{Key: "last_attempt", Value: 1},
+			},
+			Options: options.Index().SetExpireAfterSeconds(86400).SetName("idx_ratelimit_ttl"),
+		},
+	})
+}
+
+func ensureFileFolders(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("file_folders")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Unique folder name within parent (prevents duplicate folder names)
+		// This index also serves for listing folders by parent, sorted by name
+		{
+			Keys: bson.D{
+				{Key: "parent_id", Value: 1},
+				{Key: "name_ci", Value: 1},
+			},
+			Options: options.Index().SetUnique(true).SetName("uniq_folder_parent_name"),
+		},
+		// List folders by parent, sorted by date
+		{
+			Keys: bson.D{
+				{Key: "parent_id", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_folder_parent_created"),
+		},
+	})
+}
+
+func ensureFiles(ctx context.Context, db *mongo.Database) error {
+	c := db.Collection("files")
+	return ensureIndexSet(ctx, c, []mongo.IndexModel{
+		// Unique filename within folder (prevents duplicate filenames)
+		// This index also serves for listing files by folder, sorted by name
+		{
+			Keys: bson.D{
+				{Key: "folder_id", Value: 1},
+				{Key: "name_ci", Value: 1},
+			},
+			Options: options.Index().SetUnique(true).SetName("uniq_file_folder_name"),
+		},
+		// List files by folder, sorted by date
+		{
+			Keys: bson.D{
+				{Key: "folder_id", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_file_folder_created"),
+		},
+		// Filter files by content type
+		{
+			Keys: bson.D{
+				{Key: "content_type", Value: 1},
+			},
+			Options: options.Index().SetName("idx_file_content_type"),
 		},
 	})
 }

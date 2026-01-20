@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
@@ -58,7 +59,7 @@ func TestNewSessionManager(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sm, err := NewSessionManager(tt.sessionKey, "test-session", "", tt.secure, logger)
+			sm, err := NewSessionManager(tt.sessionKey, "test-session", "", time.Hour, tt.secure, logger)
 
 			if tt.wantErr {
 				if err == nil {
@@ -80,13 +81,13 @@ func TestSessionManager_SessionName(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Default name
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 	if sm.SessionName() != "strata-session" {
 		t.Errorf("SessionName() = %q, want %q", sm.SessionName(), "strata-session")
 	}
 
 	// Custom name
-	sm2, _ := NewSessionManager("this-is-a-32-character-long-key!", "custom-session", "", false, logger)
+	sm2, _ := NewSessionManager("this-is-a-32-character-long-key!", "custom-session", "", time.Hour, false, logger)
 	if sm2.SessionName() != "custom-session" {
 		t.Errorf("SessionName() = %q, want %q", sm2.SessionName(), "custom-session")
 	}
@@ -150,7 +151,7 @@ func TestSessionUser_UserID(t *testing.T) {
 
 func TestRequireSignedIn(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	// Handler that should only be called if authenticated
 	called := false
@@ -223,7 +224,7 @@ func TestRequireSignedIn(t *testing.T) {
 
 func TestRequireRole(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	called := false
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -319,7 +320,7 @@ func TestRequireRole(t *testing.T) {
 
 func TestRequireRole_MultipleRoles(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	called := false
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -436,7 +437,7 @@ func TestWantsHTML(t *testing.T) {
 
 func TestSessionManager_Store(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	store := sm.Store()
 	if store == nil {
@@ -446,7 +447,7 @@ func TestSessionManager_Store(t *testing.T) {
 
 func TestSessionManager_GetSession(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	sess, err := sm.GetSession(req)
@@ -477,7 +478,7 @@ func TestSessionUser_SessionToken(t *testing.T) {
 
 func TestRequireSignedIn_HTMX(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -502,7 +503,7 @@ func TestRequireSignedIn_HTMX(t *testing.T) {
 
 func TestRequireRole_HTMX(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -550,7 +551,7 @@ func TestRequireRole_HTMX(t *testing.T) {
 
 func TestRequireAuth_Alias(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -645,7 +646,7 @@ func TestCurrentURI(t *testing.T) {
 
 func TestGetString(t *testing.T) {
 	logger := zap.NewNop()
-	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", false, logger)
+	sm, _ := NewSessionManager("this-is-a-32-character-long-key!", "", "", time.Hour, false, logger)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	sess, _ := sm.GetSession(req)

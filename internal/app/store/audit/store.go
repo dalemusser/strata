@@ -27,6 +27,8 @@ const (
 	EventLoginFailedUserNotFound  = "login_failed_user_not_found"
 	EventLoginFailedWrongPassword = "login_failed_wrong_password"
 	EventLoginFailedUserDisabled  = "login_failed_user_disabled"
+	EventLoginRateLimited         = "login_rate_limited"
+	EventLoginLockedOut           = "login_locked_out"
 	EventLogout                   = "logout"
 	EventPasswordChanged          = "password_changed"
 	EventVerificationCodeSent     = "verification_code_sent"

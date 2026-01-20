@@ -13,6 +13,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 	"github.com/dalemusser/waffle/pantry/templates"
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/csrf"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
@@ -65,6 +66,7 @@ func Routes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
 	r.Get("/", h.list)
 	r.Get("/new", h.showNew)
 	r.Post("/new", h.create)
+	r.Get("/{id}", h.show)
 	r.Get("/{id}/manage_modal", h.manageModal)
 	r.Get("/{id}/edit", h.showEdit)
 	r.Post("/{id}", h.update)
@@ -235,11 +237,71 @@ type EditVM struct {
 
 // ManageModalVM is the view model for the manage modal.
 type ManageModalVM struct {
-	ID      string
-	Title   string
-	Type    string
-	Active  bool
-	BackURL string
+	ID        string
+	Title     string
+	Type      string
+	Active    bool
+	BackURL   string
+	CSRFToken string
+}
+
+// ShowVM is the view model for viewing an announcement.
+type ShowVM struct {
+	viewdata.BaseVM
+	ID          string
+	AnnTitle    string
+	Content     string
+	Type        string
+	Dismissible bool
+	Active      bool
+	StartsAt    string
+	EndsAt      string
+}
+
+// show displays a single announcement.
+func (h *Handler) show(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	ann, err := h.announcementStore.GetByID(r.Context(), objID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	backURL := r.URL.Query().Get("return")
+	if backURL == "" {
+		backURL = "/announcements"
+	}
+
+	startsAt := ""
+	if ann.StartsAt != nil {
+		startsAt = ann.StartsAt.Format("Jan 2, 2006 3:04 PM")
+	}
+	endsAt := ""
+	if ann.EndsAt != nil {
+		endsAt = ann.EndsAt.Format("Jan 2, 2006 3:04 PM")
+	}
+
+	vm := ShowVM{
+		BaseVM:      viewdata.New(r),
+		ID:          id,
+		AnnTitle:    ann.Title,
+		Content:     ann.Content,
+		Type:        string(ann.Type),
+		Dismissible: ann.Dismissible,
+		Active:      ann.Active,
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+	}
+	vm.Title = "View Announcement"
+	vm.BackURL = backURL
+
+	templates.Render(w, r, "announcements/show", vm)
 }
 
 // manageModal displays the manage modal for an announcement.
@@ -263,14 +325,15 @@ func (h *Handler) manageModal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vm := ManageModalVM{
-		ID:      id,
-		Title:   ann.Title,
-		Type:    string(ann.Type),
-		Active:  ann.Active,
-		BackURL: backURL,
+		ID:        id,
+		Title:     ann.Title,
+		Type:      string(ann.Type),
+		Active:    ann.Active,
+		BackURL:   backURL,
+		CSRFToken: csrf.Token(r),
 	}
 
-	templates.Render(w, r, "announcements/manage_modal", vm)
+	templates.RenderSnippet(w, "announcements/manage_modal", vm)
 }
 
 // showEdit displays the edit announcement form.
@@ -441,4 +504,60 @@ func (h *Handler) GetActiveAnnouncements(ctx context.Context) ([]announcement.An
 // GetStore returns the underlying announcement store for use by other components.
 func (h *Handler) GetStore() *announcement.Store {
 	return h.announcementStore
+}
+
+// ViewVM is the view model for the user-facing announcements view.
+type ViewVM struct {
+	viewdata.BaseVM
+	Items []viewAnnouncementRow
+}
+
+// viewAnnouncementRow represents an announcement in the user view.
+type viewAnnouncementRow struct {
+	ID          string
+	Title       string
+	Content     string
+	Type        string // info, warning, critical
+	Dismissible bool
+}
+
+// ViewRoutes returns routes for the user-facing announcements view.
+// These routes require authentication but not admin role.
+func ViewRoutes(h *Handler, sessionMgr *auth.SessionManager) http.Handler {
+	r := chi.NewRouter()
+	r.Use(sessionMgr.RequireAuth)
+
+	r.Get("/", h.viewAnnouncements)
+
+	return r
+}
+
+// viewAnnouncements displays all active announcements for the user.
+func (h *Handler) viewAnnouncements(w http.ResponseWriter, r *http.Request) {
+	announcements, err := h.announcementStore.GetActive(r.Context())
+	if err != nil {
+		h.errLog.Log(r, "failed to get active announcements", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	rows := make([]viewAnnouncementRow, 0, len(announcements))
+	for _, ann := range announcements {
+		rows = append(rows, viewAnnouncementRow{
+			ID:          ann.ID.Hex(),
+			Title:       ann.Title,
+			Content:     ann.Content,
+			Type:        string(ann.Type),
+			Dismissible: ann.Dismissible,
+		})
+	}
+
+	vm := ViewVM{
+		BaseVM: viewdata.New(r),
+		Items:  rows,
+	}
+	vm.Title = "Announcements"
+	vm.BackURL = "/dashboard"
+
+	templates.Render(w, r, "announcements/view", vm)
 }

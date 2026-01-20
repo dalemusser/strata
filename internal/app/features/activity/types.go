@@ -8,6 +8,7 @@ package activity
 import (
 	"time"
 
+	"github.com/dalemusser/strata/internal/app/system/timezones"
 	"github.com/dalemusser/strata/internal/app/system/viewdata"
 )
 
@@ -103,19 +104,22 @@ type summaryData struct {
 // activityEvent represents an event in the user detail timeline.
 type activityEvent struct {
 	Time        time.Time
-	TimeLabel   string
+	TimeLabel   string // Formatted time (fallback)
+	TimeISO     string // ISO 8601 format for client-side formatting
 	EventType   string
 	Description string
 }
 
 // sessionBlock represents a session in the user detail view.
 type sessionBlock struct {
-	Date       string
-	LoginTime  string
-	LogoutTime string
-	Duration   string
-	EndReason  string
-	Events     []activityEvent
+	Date          string
+	LoginTime     string // Formatted time (fallback)
+	LoginTimeISO  string // ISO 8601 format for client-side formatting
+	LogoutTime    string // Formatted time (fallback)
+	LogoutTimeISO string // ISO 8601 format for client-side formatting (empty if active)
+	Duration      string
+	EndReason     string
+	Events        []activityEvent
 }
 
 // userDetailData is the view model for the user detail view.
@@ -123,17 +127,21 @@ type userDetailData struct {
 	viewdata.BaseVM
 
 	// User info
-	UserID    string
-	UserName  string
-	LoginID   string
-	Email     string
-	UserRole  string
+	UserID   string
+	UserName string
+	LoginID  string
+	Email    string
+	UserRole string
+
+	// Timezone selector
+	Timezone       string              // Selected timezone ID (e.g., "America/Denver")
+	TimezoneGroups []timezones.ZoneGroup // Grouped timezone options for dropdown
 
 	// Stats
-	TotalSessions    int
-	TotalTimeStr     string // Pre-formatted "Xh Ym" or "X min"
-	AvgSessionMins   int
-	PageViews        int
+	TotalSessions  int
+	TotalTimeStr   string // Pre-formatted "Xh Ym" or "X min"
+	AvgSessionMins int
+	PageViews      int
 
 	// Session history (most recent first)
 	Sessions []sessionBlock

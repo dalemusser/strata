@@ -12,6 +12,7 @@ import (
 	authgooglefeature "github.com/dalemusser/strata/internal/app/features/authgoogle"
 	dashboardfeature "github.com/dalemusser/strata/internal/app/features/dashboard"
 	errorsfeature "github.com/dalemusser/strata/internal/app/features/errors"
+	filesfeature "github.com/dalemusser/strata/internal/app/features/files"
 	healthfeature "github.com/dalemusser/strata/internal/app/features/health"
 	heartbeatfeature "github.com/dalemusser/strata/internal/app/features/heartbeat"
 	homefeature "github.com/dalemusser/strata/internal/app/features/home"
@@ -28,6 +29,7 @@ import (
 	announcementstore "github.com/dalemusser/strata/internal/app/store/announcement"
 	"github.com/dalemusser/strata/internal/app/store/audit"
 	"github.com/dalemusser/strata/internal/app/store/oauthstate"
+	"github.com/dalemusser/strata/internal/app/store/ratelimit"
 	"github.com/dalemusser/strata/internal/app/store/sessions"
 	userstore "github.com/dalemusser/strata/internal/app/store/users"
 	"github.com/dalemusser/strata/internal/app/system/auth"
@@ -75,7 +77,7 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	// Create the session manager using app config.
 	// Secure cookies are enabled in production mode.
 	secure := coreCfg.Env == "prod"
-	sessionMgr, err := auth.NewSessionManager(appCfg.SessionKey, appCfg.SessionName, appCfg.SessionDomain, secure, logger)
+	sessionMgr, err := auth.NewSessionManager(appCfg.SessionKey, appCfg.SessionName, appCfg.SessionDomain, appCfg.SessionMaxAge, secure, logger)
 	if err != nil {
 		logger.Error("session manager init failed", zap.Error(err))
 		return nil, err
@@ -146,6 +148,10 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	// Only active when enable_cors=true in config.
 	r.Use(middleware.CORSFromConfig(coreCfg))
 
+	// Security headers middleware: adds X-Frame-Options, X-Content-Type-Options, etc.
+	// Enabled by default with secure values. Configure via enable_security_headers and related options.
+	r.Use(middleware.SecurityHeadersFromConfig(coreCfg))
+
 	// Global auth middleware: loads SessionUser into context if logged in.
 	// This makes the current user available to all handlers via auth.CurrentUser(r).
 	r.Use(sessionMgr.LoadSessionUser)
@@ -191,9 +197,15 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	csrfMiddleware := csrf.Protect([]byte(appCfg.CSRFKey), csrfOpts...)
 	r.Use(csrfMiddleware)
 
-	// Health check endpoint for load balancers and orchestrators
+	// Health check endpoints for load balancers and orchestrators
+	// Provides:
+	//   /health      - full health check with service status
+	//   /health/ready, /health/live - sub-routes
+	//   /ready, /readyz - Kubernetes readiness probes (root level)
+	//   /livez       - Kubernetes liveness probe (root level)
 	healthHandler := healthfeature.NewHandler(deps.MongoClient, logger)
 	r.Mount("/health", healthfeature.Routes(healthHandler))
+	healthfeature.MountRootEndpoints(r, healthHandler)
 
 	// Static assets with pre-compressed file support (gzip/brotli)
 	// /static/* serves files from disk (static directory)
@@ -238,6 +250,18 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	googleEnabled := appCfg.GoogleClientID != "" && appCfg.GoogleClientSecret != ""
 	// Trust login is only enabled in dev mode for security - it allows passwordless login
 	trustLoginEnabled := coreCfg.Env == "dev"
+
+	// Rate limiting for login attempts (nil if disabled)
+	var rateLimitStore *ratelimit.Store
+	if appCfg.RateLimitEnabled {
+		rateLimitStore = ratelimit.New(
+			deps.MongoDatabase,
+			appCfg.RateLimitLoginAttempts,
+			appCfg.RateLimitLoginWindow,
+			appCfg.RateLimitLoginLockout,
+		)
+	}
+
 	loginHandler := loginfeature.NewHandler(
 		deps.MongoDatabase,
 		sessionMgr,
@@ -246,6 +270,7 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 		auditLogger,
 		sessionsStore,
 		activityStore,
+		rateLimitStore,
 		appCfg.BaseURL,
 		appCfg.EmailVerifyExpiry,
 		googleEnabled,
@@ -254,11 +279,12 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	)
 	r.Mount("/login", loginfeature.Routes(loginHandler))
 
-	logoutHandler := logoutfeature.NewHandler(sessionMgr, auditLogger, sessionsStore, activityStore, logger)
+	logoutHandler := logoutfeature.NewHandler(sessionMgr, auditLogger, sessionsStore, logger)
 	r.Mount("/logout", logoutfeature.Routes(logoutHandler, sessionMgr))
 
 	// Heartbeat API for activity tracking
 	heartbeatHandler := heartbeatfeature.NewHandler(sessionsStore, activityStore, sessionMgr, logger)
+	heartbeatHandler.SetIdleLogoutConfig(appCfg.IdleLogoutEnabled, appCfg.IdleLogoutTimeout, appCfg.IdleLogoutWarning)
 	r.Mount("/api/heartbeat", heartbeatfeature.Routes(heartbeatHandler, sessionMgr))
 
 	// Google OAuth (only mount if configured)
@@ -301,7 +327,7 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	r.Mount("/dashboard/sessions", dashboardfeature.SessionsRoutes(sessionsHandler, sessionMgr))
 
 	// System user management (admin only)
-	sysUsersHandler := systemusersfeature.NewHandler(deps.MongoDatabase, errLog, auditLogger, logger)
+	sysUsersHandler := systemusersfeature.NewHandler(deps.MongoDatabase, deps.Mailer, errLog, auditLogger, logger)
 	r.Mount("/system-users", systemusersfeature.Routes(sysUsersHandler, sessionMgr))
 
 	// Audit log (admin only)
@@ -314,6 +340,13 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	// Announcements management (admin only)
 	announcementsHandler := announcementsfeature.NewHandler(deps.MongoDatabase, errLog, logger)
 	r.Mount("/announcements", announcementsfeature.Routes(announcementsHandler, sessionMgr))
+
+	// User-facing announcements view (authenticated users)
+	r.Mount("/my-announcements", announcementsfeature.ViewRoutes(announcementsHandler, sessionMgr))
+
+	// Files feature (all authenticated users can browse, admins can manage)
+	filesHandler := filesfeature.NewHandler(deps.MongoDatabase, deps.FileStorage, errLog, auditLogger, logger)
+	r.Mount("/library", filesfeature.Routes(filesHandler, sessionMgr))
 
 	// Site Settings (admin only)
 	settingsHandler := settingsfeature.NewHandler(deps.MongoDatabase, deps.FileStorage, errLog, logger)
@@ -331,8 +364,16 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 		SessionKey:         appCfg.SessionKey,
 		SessionName:        appCfg.SessionName,
 		SessionDomain:      appCfg.SessionDomain,
-		CSRFKey:            appCfg.CSRFKey,
-		APIKey:             appCfg.APIKey,
+		SessionMaxAge:      appCfg.SessionMaxAge,
+		IdleLogoutEnabled:      appCfg.IdleLogoutEnabled,
+		IdleLogoutTimeout:      appCfg.IdleLogoutTimeout,
+		IdleLogoutWarning:      appCfg.IdleLogoutWarning,
+		RateLimitEnabled:       appCfg.RateLimitEnabled,
+		RateLimitLoginAttempts: appCfg.RateLimitLoginAttempts,
+		RateLimitLoginWindow:   appCfg.RateLimitLoginWindow,
+		RateLimitLoginLockout:  appCfg.RateLimitLoginLockout,
+		CSRFKey:                appCfg.CSRFKey,
+		APIKey:                 appCfg.APIKey,
 		StorageType:        appCfg.StorageType,
 		StorageLocalPath:   appCfg.StorageLocalPath,
 		StorageLocalURL:    appCfg.StorageLocalURL,

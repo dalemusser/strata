@@ -94,6 +94,11 @@ type UpdateInput struct {
 	FooterHTML     string
 	LogoPath       string
 	LogoName       string
+	// Email notification settings
+	NotifyUserOnCreate  bool
+	NotifyUserOnDisable bool
+	NotifyUserOnEnable  bool
+	NotifyUserOnWelcome bool
 }
 
 // Upsert updates or inserts site settings from UpdateInput.
@@ -103,14 +108,18 @@ func (s *Store) Upsert(ctx context.Context, input UpdateInput) error {
 	filter := bson.M{"singleton": true}
 	update := bson.M{
 		"$set": bson.M{
-			"singleton":       true,
-			"site_name":       input.SiteName,
-			"landing_title":   input.LandingTitle,
-			"landing_content": input.LandingContent,
-			"footer_html":     input.FooterHTML,
-			"logo_path":       input.LogoPath,
-			"logo_name":       input.LogoName,
-			"updated_at":      now,
+			"singleton":              true,
+			"site_name":              input.SiteName,
+			"landing_title":          input.LandingTitle,
+			"landing_content":        input.LandingContent,
+			"footer_html":            input.FooterHTML,
+			"logo_path":              input.LogoPath,
+			"logo_name":              input.LogoName,
+			"notify_user_on_create":  input.NotifyUserOnCreate,
+			"notify_user_on_disable": input.NotifyUserOnDisable,
+			"notify_user_on_enable":  input.NotifyUserOnEnable,
+			"notify_user_on_welcome": input.NotifyUserOnWelcome,
+			"updated_at":             now,
 		},
 		"$setOnInsert": bson.M{
 			"_id": primitive.NewObjectID(),

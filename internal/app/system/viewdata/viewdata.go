@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	settingsstore "github.com/dalemusser/strata/internal/app/store/settings"
+	"github.com/dalemusser/strata/internal/app/system/auth"
 	"github.com/dalemusser/strata/internal/app/system/authz"
 	"github.com/dalemusser/strata/internal/app/system/htmlsanitize"
 	"github.com/dalemusser/strata/internal/app/system/timeouts"
@@ -53,6 +54,7 @@ type BaseVM struct {
 	// User context (from auth middleware)
 	IsLoggedIn      bool
 	UserID          string
+	LoginID         string // User's login identifier (for per-user tracking)
 	Role            string
 	UserName        string
 	ThemePreference string // light, dark, system (empty = system)
@@ -118,6 +120,13 @@ func NewBaseVM(r *http.Request, db *mongo.Database, title, backDefault string) B
 		CSRFToken:       csrf.Token(r),
 	}
 
+	// Get LoginID from session if logged in
+	if signedIn {
+		if user, ok := auth.CurrentUser(r); ok {
+			vm.LoginID = user.LoginID
+		}
+	}
+
 	if db != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), timeouts.Short())
 		defer cancel()
@@ -133,8 +142,8 @@ func NewBaseVM(r *http.Request, db *mongo.Database, title, backDefault string) B
 		}
 	}
 
-	// Load active announcements if loader is configured
-	if announcementLoader != nil {
+	// Load active announcements only if logged in and loader is configured
+	if signedIn && announcementLoader != nil {
 		vm.Announcements = announcementLoader(r.Context())
 	}
 
@@ -193,6 +202,13 @@ func New(r *http.Request) BaseVM {
 		CSRFToken:       csrf.Token(r),
 	}
 
+	// Get LoginID from session if logged in
+	if signedIn {
+		if user, ok := auth.CurrentUser(r); ok {
+			vm.LoginID = user.LoginID
+		}
+	}
+
 	// Load site settings if database is available
 	if globalDB != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), timeouts.Short())
@@ -209,8 +225,8 @@ func New(r *http.Request) BaseVM {
 		}
 	}
 
-	// Load active announcements if loader is configured
-	if announcementLoader != nil {
+	// Load active announcements only if logged in and loader is configured
+	if signedIn && announcementLoader != nil {
 		vm.Announcements = announcementLoader(r.Context())
 	}
 

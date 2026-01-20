@@ -41,10 +41,20 @@ type AppConfig struct {
 	MongoMinPoolSize uint64
 
 	// Session
-	SessionKey    string
-	SessionName   string
-	SessionDomain string
-	CSRFKey       string
+	SessionKey        string
+	SessionName       string
+	SessionDomain     string
+	SessionMaxAge     time.Duration
+	IdleLogoutEnabled bool
+	IdleLogoutTimeout time.Duration
+	IdleLogoutWarning time.Duration
+	CSRFKey           string
+
+	// Rate Limiting
+	RateLimitEnabled       bool
+	RateLimitLoginAttempts int
+	RateLimitLoginWindow   time.Duration
+	RateLimitLoginLockout  time.Duration
 
 	// API
 	APIKey string
@@ -145,8 +155,9 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeouts.Medium())
 	defer cancel()
 
+	db := h.Client.Database(h.AppCfg.MongoDatabase)
 	vm := statusVM{
-		BaseVM:       viewdata.NewBaseVM(r, nil, "System Status", "/dashboard"),
+		BaseVM:       viewdata.NewBaseVM(r, db, "System Status", "/dashboard"),
 		GoVersion:    runtime.Version(),
 		Uptime:       formatDuration(time.Since(startTime)),
 		NumGoroutine: runtime.NumGoroutine(),
@@ -423,6 +434,14 @@ func (h *Handler) buildConfigGroups() []ConfigGroup {
 			{Name: "session_key", Value: mask(h.AppCfg.SessionKey)},
 			{Name: "session_name", Value: h.AppCfg.SessionName},
 			{Name: "session_domain", Value: h.AppCfg.SessionDomain},
+			{Name: "session_max_age", Value: h.AppCfg.SessionMaxAge.String()},
+			{Name: "idle_logout_enabled", Value: boolStr(h.AppCfg.IdleLogoutEnabled)},
+			{Name: "idle_logout_timeout", Value: h.AppCfg.IdleLogoutTimeout.String()},
+			{Name: "idle_logout_warning", Value: h.AppCfg.IdleLogoutWarning.String()},
+			{Name: "rate_limit_enabled", Value: boolStr(h.AppCfg.RateLimitEnabled)},
+			{Name: "rate_limit_login_attempts", Value: fmt.Sprintf("%d", h.AppCfg.RateLimitLoginAttempts)},
+			{Name: "rate_limit_login_window", Value: h.AppCfg.RateLimitLoginWindow.String()},
+			{Name: "rate_limit_login_lockout", Value: h.AppCfg.RateLimitLoginLockout.String()},
 			{Name: "csrf_key", Value: mask(h.AppCfg.CSRFKey)},
 			{Name: "api_key", Value: mask(h.AppCfg.APIKey)},
 		},

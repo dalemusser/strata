@@ -6,6 +6,7 @@ package login
 //   - LoginID / loginID / login_id: The human-readable string users type to log in
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/dalemusser/strata/internal/app/store/activity"
 	"github.com/dalemusser/strata/internal/app/store/emailverify"
 	"github.com/dalemusser/strata/internal/app/store/passwordreset"
+	"github.com/dalemusser/strata/internal/app/store/ratelimit"
 	"github.com/dalemusser/strata/internal/app/store/sessions"
 	userstore "github.com/dalemusser/strata/internal/app/store/users"
 	"github.com/dalemusser/strata/internal/app/system/auth"
@@ -37,6 +39,7 @@ type Handler struct {
 	passwordResetStore *passwordreset.Store
 	sessionsStore      *sessions.Store
 	activityStore      *activity.Store
+	rateLimitStore     *ratelimit.Store // nil if rate limiting disabled
 	sessionMgr         *auth.SessionManager
 	errLog             *errorsfeature.ErrorLogger
 	mailer             *mailer.Mailer
@@ -50,6 +53,7 @@ type Handler struct {
 
 // NewHandler creates a new login Handler.
 // Set trustLoginEnabled to true only in development mode.
+// rateLimitStore can be nil to disable rate limiting.
 func NewHandler(
 	db *mongo.Database,
 	sessionMgr *auth.SessionManager,
@@ -58,6 +62,7 @@ func NewHandler(
 	auditLogger *auditlog.Logger,
 	sessionsStore *sessions.Store,
 	activityStore *activity.Store,
+	rateLimitStore *ratelimit.Store,
 	baseURL string,
 	emailVerifyExpiry time.Duration,
 	googleEnabled bool,
@@ -76,6 +81,7 @@ func NewHandler(
 		passwordResetStore: passwordreset.New(db, passwordResetExpiry),
 		sessionsStore:      sessionsStore,
 		activityStore:      activityStore,
+		rateLimitStore:     rateLimitStore,
 		sessionMgr:         sessionMgr,
 		errLog:             errLog,
 		mailer:             m,
@@ -322,8 +328,39 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	returnURL := r.FormValue("return")
 
+	// Check rate limit before processing
+	if h.rateLimitStore != nil {
+		allowed, _, lockedUntil := h.rateLimitStore.CheckAllowed(r.Context(), loginID)
+		if !allowed {
+			h.auditLogger.LogAuthEvent(r, nil, "login_rate_limited", false, "rate limit exceeded for "+loginID)
+
+			errorMsg := "Too many failed login attempts. Please try again later."
+			if lockedUntil != nil {
+				remaining := time.Until(*lockedUntil)
+				if remaining > time.Minute {
+					errorMsg = fmt.Sprintf("Too many failed login attempts. Please try again in %d minute(s).", int(remaining.Minutes())+1)
+				} else {
+					errorMsg = fmt.Sprintf("Too many failed login attempts. Please try again in %d second(s).", int(remaining.Seconds())+1)
+				}
+			}
+
+			vm := PasswordLoginVM{
+				BaseVM:    viewdata.New(r),
+				Error:     errorMsg,
+				LoginID:   loginID,
+				ReturnURL: returnURL,
+			}
+			templates.Render(w, r, "login/password", vm)
+			return
+		}
+	}
+
 	user, err := h.userStore.GetByLoginID(r.Context(), loginID)
 	if err != nil {
+		// Record failure for rate limiting (even though user doesn't exist)
+		if h.rateLimitStore != nil {
+			h.rateLimitStore.RecordFailure(r.Context(), loginID)
+		}
 		h.auditLogger.LoginFailedUserNotFound(r.Context(), r, loginID)
 
 		vm := PasswordLoginVM{
@@ -336,6 +373,10 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if user.Status != "active" {
+		// Record failure for rate limiting
+		if h.rateLimitStore != nil {
+			h.rateLimitStore.RecordFailure(r.Context(), loginID)
+		}
 		h.auditLogger.LogAuthEvent(r, &user.ID, "login_failed_user_disabled", false, "user disabled")
 
 		vm := PasswordLoginVM{
@@ -348,6 +389,30 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if user.PasswordHash == nil || !authutil.CheckPassword(password, *user.PasswordHash) {
+		// Record failure for rate limiting
+		if h.rateLimitStore != nil {
+			lockedOut, lockedUntil := h.rateLimitStore.RecordFailure(r.Context(), loginID)
+			if lockedOut {
+				h.auditLogger.LogAuthEvent(r, &user.ID, "login_locked_out", false, "too many failed attempts")
+				errorMsg := "Too many failed login attempts. Please try again later."
+				if lockedUntil != nil {
+					remaining := time.Until(*lockedUntil)
+					if remaining > time.Minute {
+						errorMsg = fmt.Sprintf("Too many failed login attempts. Please try again in %d minute(s).", int(remaining.Minutes())+1)
+					} else {
+						errorMsg = fmt.Sprintf("Too many failed login attempts. Please try again in %d second(s).", int(remaining.Seconds())+1)
+					}
+				}
+				vm := PasswordLoginVM{
+					BaseVM:    viewdata.New(r),
+					Error:     errorMsg,
+					LoginID:   loginID,
+					ReturnURL: returnURL,
+				}
+				templates.Render(w, r, "login/password", vm)
+				return
+			}
+		}
 		h.auditLogger.LogAuthEvent(r, &user.ID, "login_failed_wrong_password", false, "wrong password")
 
 		vm := PasswordLoginVM{
@@ -357,6 +422,11 @@ func (h *Handler) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		templates.Render(w, r, "login/password", vm)
 		return
+	}
+
+	// Clear rate limit on successful login
+	if h.rateLimitStore != nil {
+		h.rateLimitStore.ClearOnSuccess(r.Context(), loginID)
 	}
 
 	// Create session
@@ -428,10 +498,17 @@ func (h *Handler) handleEmailLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Send email with code
 	if h.mailer != nil {
+		magicURL := h.baseURL + "/login/email/magic?token=" + verification.Token
+		textBody, htmlBody := mailer.LoginCodeEmail(mailer.LoginCodeEmailData{
+			AppName:  h.mailer.FromName(),
+			Code:     verification.Code,
+			MagicURL: magicURL,
+		})
 		err = h.mailer.Send(mailer.Email{
 			To:       email,
 			Subject:  "Your Login Code",
-			TextBody: "Your login code is: " + verification.Code + "\n\nOr click here: " + h.baseURL + "/login/email/magic?token=" + verification.Token,
+			TextBody: textBody,
+			HTMLBody: htmlBody,
 		})
 		if err != nil {
 			h.errLog.Log(r, "failed to send verification email", err)
@@ -548,7 +625,7 @@ type ForgotPasswordVM struct {
 	viewdata.BaseVM
 	Error   string
 	Success string
-	Email   string
+	LoginID string
 }
 
 // showForgotPassword displays the forgot password form.
@@ -569,27 +646,27 @@ func (h *Handler) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := r.FormValue("email")
+	loginID := r.FormValue("login_id")
 
-	// Always show success message to avoid email enumeration
+	// Success message shown when we send a reset link
 	successVM := ForgotPasswordVM{
 		BaseVM:  viewdata.New(r),
-		Success: "If an account exists with that email, you will receive a password reset link.",
+		Success: "If your account has an email address on file, you will receive a password reset link.",
 	}
 	successVM.Title = "Forgot Password"
 
-	if email == "" {
+	if loginID == "" {
 		vm := ForgotPasswordVM{
 			BaseVM: viewdata.New(r),
-			Error:  "Please enter your email address",
+			Error:  "Please enter your Login ID",
 		}
 		vm.Title = "Forgot Password"
 		templates.Render(w, r, "login/forgot_password", vm)
 		return
 	}
 
-	// Look up user by email
-	user, err := h.userStore.GetByEmail(r.Context(), email)
+	// Look up user by login_id
+	user, err := h.userStore.GetByLoginID(r.Context(), loginID)
 	if err != nil {
 		// User not found - still show success to avoid enumeration
 		h.auditLogger.LogAuthEvent(r, nil, "password_reset_requested", true, "user not found")
@@ -611,8 +688,21 @@ func (h *Handler) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if user has an email address
+	if user.Email == nil || *user.Email == "" {
+		h.auditLogger.LogAuthEvent(r, &user.ID, "password_reset_requested", false, "no email address")
+		vm := ForgotPasswordVM{
+			BaseVM:  viewdata.New(r),
+			LoginID: loginID,
+			Error:   "Your account does not have an email address on file. Please contact an administrator to reset your password.",
+		}
+		vm.Title = "Forgot Password"
+		templates.Render(w, r, "login/forgot_password", vm)
+		return
+	}
+
 	// Create password reset token
-	reset, err := h.passwordResetStore.Create(r.Context(), user.ID, email)
+	reset, err := h.passwordResetStore.Create(r.Context(), user.ID, *user.Email)
 	if err != nil {
 		h.errLog.Log(r, "failed to create password reset", err)
 		templates.Render(w, r, "login/forgot_password", successVM)
@@ -622,13 +712,20 @@ func (h *Handler) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	// Send email with reset link
 	if h.mailer != nil {
 		resetURL := h.baseURL + "/login/reset-password?token=" + reset.Token
+		expiryMin := int(h.emailVerifyExpiry.Minutes())
+		if expiryMin < 1 {
+			expiryMin = 10 // default
+		}
+		textBody, htmlBody := mailer.PasswordResetEmail(mailer.PasswordResetEmailData{
+			AppName:   h.mailer.FromName(),
+			ResetURL:  resetURL,
+			ExpiryMin: expiryMin,
+		})
 		err = h.mailer.Send(mailer.Email{
-			To:      email,
-			Subject: "Password Reset Request",
-			TextBody: "You requested a password reset. Click the link below to reset your password:\n\n" +
-				resetURL + "\n\n" +
-				"This link will expire in 10 minutes.\n\n" +
-				"If you did not request this, you can safely ignore this email.",
+			To:       *user.Email,
+			Subject:  "Password Reset Request",
+			TextBody: textBody,
+			HTMLBody: htmlBody,
 		})
 		if err != nil {
 			h.errLog.Log(r, "failed to send password reset email", err)
@@ -764,6 +861,24 @@ func (h *Handler) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 
 	h.auditLogger.LogAuthEvent(r, &reset.UserID, "password_reset_completed", true, "")
 
+	// Send password changed confirmation email
+	if h.mailer != nil {
+		loginURL := h.baseURL + "/login"
+		textBody, htmlBody := mailer.PasswordChangedEmail(mailer.PasswordChangedEmailData{
+			AppName:  h.mailer.FromName(),
+			LoginURL: loginURL,
+		})
+		err = h.mailer.Send(mailer.Email{
+			To:       reset.Email,
+			Subject:  "Your Password Has Been Changed",
+			TextBody: textBody,
+			HTMLBody: htmlBody,
+		})
+		if err != nil {
+			h.errLog.Log(r, "failed to send password changed confirmation email", err)
+		}
+	}
+
 	// Show success and redirect to login
 	vm := ResetPasswordVM{
 		BaseVM:  viewdata.New(r),
@@ -799,13 +914,10 @@ func (h *Handler) createTrackedSession(w http.ResponseWriter, r *http.Request, u
 	}
 
 	// Best effort - don't fail login if tracking fails
+	// Note: Login time is captured in the session record (login_at), so we don't need
+	// a separate activity event for login - it would be redundant.
 	if err := h.sessionsStore.Create(r.Context(), session); err != nil {
 		h.logger.Warn("failed to track session", zap.Error(err))
-	} else if h.activityStore != nil {
-		// Record login activity event
-		if err := h.activityStore.RecordLogin(r.Context(), userID, session.ID, network.GetClientIP(r), r.UserAgent()); err != nil {
-			h.logger.Warn("failed to record login activity", zap.Error(err))
-		}
 	}
 
 	return nil
