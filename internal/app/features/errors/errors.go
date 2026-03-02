@@ -55,6 +55,14 @@ func (h *Handler) Forbidden(w http.ResponseWriter, r *http.Request) {
 	templates.Render(w, r, "errors/forbidden", vm)
 }
 
+// Troubleshooting renders the "Having Trouble?" self-service troubleshooting page.
+// GET /troubleshooting
+func (h *Handler) Troubleshooting(w http.ResponseWriter, r *http.Request) {
+	vm := viewdata.New(r)
+	vm.Title = "Having Trouble?"
+	templates.Render(w, r, "errors/troubleshooting", vm)
+}
+
 // Unauthorized renders the 401 unauthorized page.
 func (h *Handler) Unauthorized(w http.ResponseWriter, r *http.Request) {
 	vm := viewdata.New(r)

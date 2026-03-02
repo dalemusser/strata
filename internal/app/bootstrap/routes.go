@@ -317,6 +317,21 @@ func BuildHandler(coreCfg *config.CoreConfig, appCfg AppConfig, deps DBDeps, log
 	errorsHandler := errorsfeature.NewHandler()
 	r.Get("/forbidden", errorsHandler.Forbidden)
 	r.Get("/unauthorized", errorsHandler.Unauthorized)
+	r.Get("/troubleshooting", errorsHandler.Troubleshooting)
+
+	// Clear session: one-click recovery from CSRF/session errors.
+	// GET (not POST) because the user may not have a valid CSRF token.
+	r.Get("/clear-session", func(w http.ResponseWriter, r *http.Request) {
+		sessionMgr.DestroySession(w, r)
+		for _, name := range []string{"csrf_token", "_gorilla_csrf", "theme_pref"} {
+			http.SetCookie(w, &http.Cookie{
+				Name: name, Value: "", Path: "/",
+				Domain: appCfg.SessionDomain, MaxAge: -1,
+				Secure: secure, HttpOnly: true,
+			})
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	})
 
 	// Role-based dashboards
 	dashboardHandler := dashboardfeature.NewHandler(deps.MongoDatabase, logger)
